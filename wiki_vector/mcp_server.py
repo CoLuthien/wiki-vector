@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from .mcp_tools import wiki_read, wiki_reindex, wiki_search, wiki_status
+from .mcp_tools import wiki_read, wiki_reindex, wiki_search, wiki_status, wiki_write
 
 
 def _wiki_path(value: str | None = None) -> str:
@@ -37,6 +37,11 @@ def main() -> None:
     def wiki_reindex_tool(include_raw: bool = False, wiki_path: str | None = None) -> dict[str, Any]:
         """Rebuild the local index from Markdown wiki files."""
         return wiki_reindex(_wiki_path(wiki_path), include_raw=include_raw)
+
+    @mcp.tool(name="wiki_write")
+    def wiki_write_tool(path: str, content: str, mode: str = "create", reindex: bool = True, wiki_path: str | None = None) -> dict[str, Any]:
+        """Create, overwrite, or append to a Markdown wiki page, then optionally reindex."""
+        return wiki_write(_wiki_path(wiki_path), path=path, content=content, mode=mode, reindex=reindex)
 
     @mcp.tool(name="wiki_status")
     def wiki_status_tool(wiki_path: str | None = None) -> dict[str, Any]:

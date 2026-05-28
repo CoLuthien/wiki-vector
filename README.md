@@ -73,6 +73,7 @@ MCP tools:
 
 - `wiki_search(query, limit=8, include_raw=false)` — returns candidate path/heading/snippet locators.
 - `wiki_read(path, heading=null)` — reads Markdown source of truth.
+- `wiki_write(path, content, mode="create", reindex=true)` — creates, overwrites, or appends a Markdown page and optionally rebuilds the index.
 - `wiki_reindex(include_raw=false)` — rebuilds the local LanceDB/BM25 hybrid index.
 - `wiki_status()` — reports index metadata.
 

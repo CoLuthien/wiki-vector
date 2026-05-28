@@ -63,6 +63,18 @@ class ReadResult:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class WriteResult:
+    path: str
+    mode: str
+    bytes_written: int
+    reindexed: bool
+    status: dict[str, Any] | None = None
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
 class WikiIndex:
     """LanceDB-backed local hybrid index for Markdown wiki chunks.
 
@@ -197,9 +209,7 @@ class WikiIndex:
         return results[:limit]
 
     def read(self, path: str, heading: str | None = None) -> ReadResult:
-        rel = Path(path)
-        if rel.is_absolute() or ".." in rel.parts:
-            raise ValueError("path must be relative to wiki root")
+        rel = self._safe_markdown_path(path)
         full = self.wiki_path / rel
         text = full.read_text(encoding="utf-8")
         doc = parse_markdown(rel, text)
@@ -209,6 +219,52 @@ class WikiIndex:
             if chunk.heading == heading:
                 return ReadResult(path=rel.as_posix(), title=doc.title, heading=heading, content=chunk.text)
         raise ValueError(f"heading not found: {heading}")
+
+    def write(self, path: str, content: str, mode: str = "create", reindex: bool = True) -> WriteResult:
+        """Write a Markdown wiki page on the local source of truth.
+
+        `mode` is intentionally small and explicit:
+        - `create`: fail if the page already exists.
+        - `overwrite`: replace the page completely.
+        - `append`: append content to an existing page, creating it if missing.
+        """
+        rel = self._safe_markdown_path(path)
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("content must be a non-empty string")
+        if mode not in {"create", "overwrite", "append"}:
+            raise ValueError("mode must be one of: create, overwrite, append")
+
+        full = self.wiki_path / rel
+        if mode == "create" and full.exists():
+            raise FileExistsError(f"wiki page already exists: {rel.as_posix()}")
+        full.parent.mkdir(parents=True, exist_ok=True)
+
+        if mode == "append" and full.exists():
+            existing = full.read_text(encoding="utf-8")
+            separator = "\n\n" if existing and not existing.endswith("\n\n") else ""
+            final = existing + separator + content.rstrip() + "\n"
+        else:
+            final = content.rstrip() + "\n"
+        full.write_text(final, encoding="utf-8")
+
+        status = self.reindex(include_raw=False).to_dict() if reindex else None
+        return WriteResult(
+            path=rel.as_posix(),
+            mode=mode,
+            bytes_written=len(final.encode("utf-8")),
+            reindexed=bool(reindex),
+            status=status,
+        )
+
+    def _safe_markdown_path(self, path: str) -> Path:
+        rel = Path(path)
+        if rel.is_absolute() or ".." in rel.parts:
+            raise ValueError("path must be relative to wiki root")
+        if rel.suffix.lower() != ".md":
+            raise ValueError("path must point to a Markdown .md file")
+        if rel.parts and rel.parts[0] == ".vector":
+            raise ValueError("cannot read or write the .vector index directory")
+        return rel
 
     def _load_chunks(self) -> list[dict]:
         if not self.chunks_file.exists():
@@ -342,3 +398,4 @@ def _snippet(text: str, q_terms: list[str], max_len: int = 240) -> str:
     if end < len(text):
         snippet += "…"
     return snippet
+
