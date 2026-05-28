@@ -71,3 +71,27 @@ def test_read_section_returns_requested_heading(tmp_path):
     assert content.heading == "NPU verification"
     assert content.content.startswith("## NPU verification")
     assert "xrt-smi" in content.content
+
+
+def test_reindex_uses_lancedb_hybrid_backend(tmp_path):
+    wiki = make_wiki(tmp_path)
+    index = WikiIndex(wiki)
+
+    status = index.reindex(include_raw=False)
+
+    assert status.backend == "lancedb-hybrid"
+    assert status.embedding_model.startswith("hashing-ngram")
+    assert (wiki / ".vector" / "lancedb").exists()
+
+
+def test_hybrid_search_reports_component_scores(tmp_path):
+    wiki = make_wiki(tmp_path)
+    index = WikiIndex(wiki)
+    index.reindex(include_raw=False)
+
+    results = index.search("xrt-smi NPU verification", limit=1)
+
+    assert results[0].path == "concepts/runbook.md"
+    assert results[0].heading == "NPU verification"
+    assert results[0].bm25_score > 0
+    assert results[0].vector_score > 0

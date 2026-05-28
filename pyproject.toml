@@ -7,6 +7,7 @@ requires-python = ">=3.11"
 dependencies = [
   "pyyaml>=6.0",
   "mcp>=1.0.0",
+  "lancedb>=0.32.0",
 ]
 
 [build-system]
@@ -23,3 +24,8 @@ wiki-vector-mcp = "wiki_vector.mcp_server:main"
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
