@@ -1,0 +1,25 @@
+[project]
+name = "wiki-vector"
+version = "0.1.0"
+description = "Local semantic/lexical index and MCP server for a Markdown LLM Wiki"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "pyyaml>=6.0",
+  "mcp>=1.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["wiki_vector*"]
+
+[project.scripts]
+wiki-vector = "wiki_vector.cli:main"
+wiki-vector-mcp = "wiki_vector.mcp_server:main"
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
