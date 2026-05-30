@@ -10,8 +10,9 @@ from collections import Counter
 from typing import Any
 
 from .chunking import Chunk, chunk_document
-from .embeddings import HashingNgramEmbedder
+from .embeddings import Embedder, create_embedder
 from .markdown import iter_wiki_markdown_files, parse_markdown
+from .verbosity import VerbosityResult, analyze_verbosity
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_./:\\-]+|[가-힣]+")
 BACKEND = "lancedb-hybrid"
@@ -28,6 +29,10 @@ class IndexStatus:
     include_raw: bool
     last_indexed_at: float
     embedding_model: str = "hashing-ngram-256"
+    embedding_backend: str = "hashing-ngram"
+    embedding_dimensions: int = 256
+    embedding_device: str | None = None
+    embedding_max_length: int | None = None
     bm25_weight: float = BM25_WEIGHT
     vector_weight: float = VECTOR_WEIGHT
 
@@ -47,6 +52,9 @@ class SearchResult:
     snippet: str
     bm25_score: float = 0.0
     vector_score: float = 0.0
+    start_line: int = 0
+    end_line: int = 0
+    read_hint: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -58,6 +66,8 @@ class ReadResult:
     title: str
     heading: str | None
     content: str
+    start_line: int | None = None
+    end_line: int | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -84,20 +94,21 @@ class WikiIndex:
     `read()`, not authoritative evidence by themselves.
     """
 
-    def __init__(self, wiki_path: str | Path):
+    def __init__(self, wiki_path: str | Path, embedder: Embedder | None = None):
         self.wiki_path = Path(wiki_path).expanduser().resolve()
         self.vector_dir = self.wiki_path / ".vector"
         self.lancedb_dir = self.vector_dir / "lancedb"
         self.chunks_file = self.vector_dir / "chunks.jsonl"
         self.manifest_file = self.vector_dir / "manifest.json"
         self.table_name = "chunks"
-        self.embedder = HashingNgramEmbedder(dimensions=256)
+        self.embedder = embedder or create_embedder()
 
     def reindex(self, include_raw: bool = False) -> IndexStatus:
         self.vector_dir.mkdir(parents=True, exist_ok=True)
         self.lancedb_dir.mkdir(parents=True, exist_ok=True)
         chunks: list[Chunk] = []
         rows: list[dict[str, Any]] = []
+        vector_texts: list[str] = []
         pages = 0
         files_meta: dict[str, dict] = {}
         for path in iter_wiki_markdown_files(self.wiki_path, include_raw=include_raw):
@@ -111,8 +122,15 @@ class WikiIndex:
             files_meta[rel.as_posix()] = {"mtime": st.st_mtime, "size": st.st_size, "chunks": len(doc_chunks)}
             for chunk in doc_chunks:
                 row = chunk.to_dict()
-                row["vector"] = self.embedder.embed(_searchable_text(row))
                 rows.append(row)
+                vector_texts.append(_searchable_text(row))
+
+        if rows:
+            vectors = self.embedder.embed_many(vector_texts)
+            if len(vectors) != len(rows):
+                raise RuntimeError(f"embedder returned {len(vectors)} vectors for {len(rows)} rows")
+            for row, vector in zip(rows, vectors):
+                row["vector"] = vector
 
         with self.chunks_file.open("w", encoding="utf-8") as f:
             for chunk in chunks:
@@ -127,6 +145,10 @@ class WikiIndex:
             include_raw=include_raw,
             last_indexed_at=time.time(),
             embedding_model=self.embedder.model_name,
+            embedding_backend=getattr(self.embedder, "backend", self.embedder.__class__.__name__),
+            embedding_dimensions=int(getattr(self.embedder, "dimensions", 0) or 0),
+            embedding_device=getattr(self.embedder, "device", None),
+            embedding_max_length=getattr(self.embedder, "max_length", None),
         )
         manifest = status.to_dict() | {"files": files_meta}
         self.manifest_file.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -134,7 +156,19 @@ class WikiIndex:
 
     def status(self) -> IndexStatus:
         if not self.manifest_file.exists():
-            return IndexStatus(str(self.wiki_path), BACKEND, 0, 0, False, 0.0, self.embedder.model_name)
+            return IndexStatus(
+                wiki_path=str(self.wiki_path),
+                backend=BACKEND,
+                pages_indexed=0,
+                chunks_indexed=0,
+                include_raw=False,
+                last_indexed_at=0.0,
+                embedding_model=self.embedder.model_name,
+                embedding_backend=getattr(self.embedder, "backend", self.embedder.__class__.__name__),
+                embedding_dimensions=int(getattr(self.embedder, "dimensions", 0) or 0),
+                embedding_device=getattr(self.embedder, "device", None),
+                embedding_max_length=getattr(self.embedder, "max_length", None),
+            )
         data = json.loads(self.manifest_file.read_text(encoding="utf-8"))
         return IndexStatus(
             wiki_path=data.get("wiki_path", str(self.wiki_path)),
@@ -144,6 +178,10 @@ class WikiIndex:
             include_raw=bool(data.get("include_raw", False)),
             last_indexed_at=float(data.get("last_indexed_at", 0.0)),
             embedding_model=data.get("embedding_model", self.embedder.model_name),
+            embedding_backend=data.get("embedding_backend", getattr(self.embedder, "backend", self.embedder.__class__.__name__)),
+            embedding_dimensions=int(data.get("embedding_dimensions", getattr(self.embedder, "dimensions", 0) or 0)),
+            embedding_device=data.get("embedding_device", getattr(self.embedder, "device", None)),
+            embedding_max_length=data.get("embedding_max_length", getattr(self.embedder, "max_length", None)),
             bm25_weight=float(data.get("bm25_weight", BM25_WEIGHT)),
             vector_weight=float(data.get("vector_weight", VECTOR_WEIGHT)),
         )
@@ -203,22 +241,58 @@ class WikiIndex:
                     snippet=_snippet(chunk.get("text", ""), q_terms),
                     bm25_score=round(bm25_scores.get(cid, 0.0), 6),
                     vector_score=round(vector_scores.get(cid, 0.0), 6),
+                    start_line=int(chunk.get("start_line") or 0),
+                    end_line=int(chunk.get("end_line") or 0),
+                    read_hint=_read_hint(chunk),
                 )
             )
         results.sort(key=lambda r: r.score, reverse=True)
         return results[:limit]
 
-    def read(self, path: str, heading: str | None = None) -> ReadResult:
+    def read(self, path: str, heading: str | None = None, start_line: int | None = None, end_line: int | None = None) -> ReadResult:
         rel = self._safe_markdown_path(path)
         full = self.wiki_path / rel
         text = full.read_text(encoding="utf-8")
         doc = parse_markdown(rel, text)
+        if start_line is not None or end_line is not None:
+            if start_line is None or end_line is None:
+                raise ValueError("start_line and end_line must be provided together")
+            return _read_line_range(rel.as_posix(), doc.title, text, start_line, end_line)
         if heading is None:
             return ReadResult(path=rel.as_posix(), title=doc.title, heading=None, content=text)
         for chunk in chunk_document(doc):
             if chunk.heading == heading:
-                return ReadResult(path=rel.as_posix(), title=doc.title, heading=heading, content=chunk.text)
+                return ReadResult(
+                    path=rel.as_posix(),
+                    title=doc.title,
+                    heading=heading,
+                    content=chunk.text,
+                    start_line=chunk.start_line,
+                    end_line=chunk.end_line,
+                )
         raise ValueError(f"heading not found: {heading}")
+
+    def is_verbose(self, path: str, *, include_code: bool = False, compare_to: str | None = None) -> VerbosityResult:
+        rel = self._safe_markdown_path(path)
+        text = (self.wiki_path / rel).read_text(encoding="utf-8")
+        compare_text = None
+        if compare_to is not None:
+            compare_rel = self._safe_markdown_path(compare_to)
+            compare_text = (self.wiki_path / compare_rel).read_text(encoding="utf-8")
+        return analyze_verbosity(rel.as_posix(), text, include_code=include_code, compare_to=compare_text)
+
+    def verbosity_audit(self, *, limit: int = 20, include_raw: bool = False, severity: str | None = None) -> list[VerbosityResult]:
+        if severity is not None and severity not in {"ok", "warning", "high"}:
+            raise ValueError("severity must be one of: ok, warning, high")
+        results: list[VerbosityResult] = []
+        for full in iter_wiki_markdown_files(self.wiki_path, include_raw=include_raw):
+            rel = full.relative_to(self.wiki_path).as_posix()
+            result = analyze_verbosity(rel, full.read_text(encoding="utf-8"))
+            if severity is None or result.severity == severity:
+                results.append(result)
+        _apply_corpus_calibration(results)
+        results.sort(key=lambda r: (r.score, r.metrics.get("line_count", 0)), reverse=True)
+        return results[:limit]
 
     def write(self, path: str, content: str, mode: str = "create", reindex: bool = True) -> WriteResult:
         """Write a Markdown wiki page on the local source of truth.
@@ -321,6 +395,56 @@ class WikiIndex:
         return scores
 
 
+def _apply_corpus_calibration(results: list[VerbosityResult]) -> None:
+    """Add audit-time percentile metrics/reasons in-place via mutable metrics dicts.
+
+    Single-page is_verbose stays absolute-threshold based; audits annotate corpus
+    outliers without changing the dataclass object identity.
+    """
+    if not results:
+        return
+    keys = ["line_count", "max_section_lines", "word_count"]
+    def number_metric(result: VerbosityResult, key: str) -> float:
+        value = result.metrics.get(key, 0)
+        return float(value) if isinstance(value, (int, float)) else 0.0
+    sorted_values = {k: sorted(number_metric(r, k) for r in results) for k in keys}
+    for result in results:
+        for k in keys:
+            v = number_metric(result, k)
+            vals = sorted_values[k]
+            le = sum(1 for item in vals if item <= v)
+            result.metrics[f"{k}_percentile"] = round(le / max(len(vals), 1), 6)
+
+
+def _read_line_range(path: str, title: str, text: str, start_line: int, end_line: int) -> ReadResult:
+    if start_line < 1:
+        raise ValueError("start_line must be >= 1")
+    if end_line < start_line:
+        raise ValueError("end_line must be >= start_line")
+    lines = text.splitlines()
+    if end_line > len(lines):
+        raise ValueError(f"end_line {end_line} exceeds file length {len(lines)}")
+    return ReadResult(
+        path=path,
+        title=title,
+        heading=None,
+        content="\n".join(lines[start_line - 1 : end_line]),
+        start_line=start_line,
+        end_line=end_line,
+    )
+
+
+def _read_hint(chunk: dict) -> str:
+    path = chunk.get("path", "")
+    heading = chunk.get("heading") or ""
+    start_line = int(chunk.get("start_line") or 0)
+    end_line = int(chunk.get("end_line") or 0)
+    anchor = f"#{heading}" if heading else ""
+    if start_line and end_line:
+        return f"{path}{anchor} lines {start_line}-{end_line}"
+    return f"{path}{anchor}"
+
+
 def _passes_filters(chunk: dict, include_raw: bool, types: list[str] | None, tags: list[str] | None) -> bool:
     if chunk.get("is_raw") and not include_raw:
         return False
@@ -398,4 +522,3 @@ def _snippet(text: str, q_terms: list[str], max_len: int = 240) -> str:
     if end < len(text):
         snippet += "…"
     return snippet
-

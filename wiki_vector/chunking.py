@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Iterable
 import hashlib
 import re
 
@@ -24,6 +23,8 @@ class Chunk:
     text: str
     is_raw: bool
     text_hash: str
+    start_line: int
+    end_line: int
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -35,7 +36,7 @@ def chunk_document(doc: MarkdownDocument) -> list[Chunk]:
         return []
     matches = list(_HEADING_RE.finditer(body))
     if not matches:
-        return [_make_chunk(doc, doc.title, 0, body, 0)]
+        return [_make_chunk(doc, doc.title, 0, body, 0, 1, _line_count(body))]
 
     chunks: list[Chunk] = []
     for i, match in enumerate(matches):
@@ -45,13 +46,16 @@ def chunk_document(doc: MarkdownDocument) -> list[Chunk]:
         heading = match.group(2).strip()
         level = len(match.group(1))
         if section:
-            chunks.append(_make_chunk(doc, heading, level, section, i))
+            start_line = _line_number_at(body, start)
+            end_line = _line_number_at(body, max(end - 1, start))
+            chunks.append(_make_chunk(doc, heading, level, section, i, start_line, end_line))
     return chunks
 
 
-def _make_chunk(doc: MarkdownDocument, heading: str, level: int, text: str, ordinal: int) -> Chunk:
+def _make_chunk(doc: MarkdownDocument, heading: str, level: int, text: str, ordinal: int, start_line: int, end_line: int) -> Chunk:
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
     cid = hashlib.sha256(f"{doc.path}\0{heading}\0{ordinal}\0{digest}".encode("utf-8")).hexdigest()[:24]
+    line_offset = doc.frontmatter_lines
     return Chunk(
         id=cid,
         path=doc.path,
@@ -65,4 +69,14 @@ def _make_chunk(doc: MarkdownDocument, heading: str, level: int, text: str, ordi
         text=text,
         is_raw=doc.path.startswith("raw/"),
         text_hash=digest,
+        start_line=start_line + line_offset,
+        end_line=end_line + line_offset,
     )
+
+
+def _line_number_at(text: str, offset: int) -> int:
+    return text.count("\n", 0, offset) + 1
+
+
+def _line_count(text: str) -> int:
+    return text.count("\n") + 1 if text else 1

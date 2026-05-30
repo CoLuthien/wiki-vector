@@ -43,6 +43,37 @@ def test_cli_index_status_search_and_read_json(tmp_path):
     assert index.returncode == 0, index.stderr
     assert "chunks_indexed" in index.stdout
     assert json.loads(status.stdout)["pages_indexed"] == 1
-    assert json.loads(search.stdout)[0]["path"] == "concepts/runbook.md"
+    assert json.loads(status.stdout)["embedding_backend"] == "hashing-ngram"
+    search_result = json.loads(search.stdout)[0]
+    assert search_result["path"] == "concepts/runbook.md"
+    assert search_result["read_hint"] == "concepts/runbook.md#NPU verification lines 9-11"
     assert read.returncode == 0
     assert "xrt-smi" in read.stdout
+
+def test_cli_read_line_range_json(tmp_path):
+    wiki = make_wiki(tmp_path)
+
+    read = run_cli("--wiki", str(wiki), "read", "concepts/runbook.md", "--start-line", "9", "--end-line", "11", "--json")
+
+    assert read.returncode == 0, read.stderr
+    result = json.loads(read.stdout)
+    assert result["start_line"] == 9
+    assert result["end_line"] == 11
+    assert result["content"] == "## NPU verification\n\nUse xrt-smi to verify NPU activity."
+
+
+def test_cli_is_verbose_and_verbosity_audit_json(tmp_path):
+    wiki = make_wiki(tmp_path)
+    (wiki / "concepts" / "long.md").write_text("# Long\n\n" + "\n".join(f"Line {i}." for i in range(240)))
+
+    verbose = run_cli("--wiki", str(wiki), "is-verbose", "concepts/long.md", "--json")
+    audit = run_cli("--wiki", str(wiki), "verbosity-audit", "--limit", "2", "--json")
+    human = run_cli("--wiki", str(wiki), "is-verbose", "concepts/long.md")
+
+    assert verbose.returncode == 0, verbose.stderr
+    data = json.loads(verbose.stdout)
+    assert data["is_verbose"] is True
+    assert data["score"] > 0
+    audit_data = json.loads(audit.stdout)
+    assert audit_data["results"][0]["path"] == "concepts/long.md"
+    assert "VERBOSE" in human.stdout

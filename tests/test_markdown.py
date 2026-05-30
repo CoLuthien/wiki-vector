@@ -55,6 +55,7 @@ Use xrt-smi.
     assert chunks[1].type == "concept"
     assert chunks[1].tags == ["gemma4"]
     assert "deployment DLLs" in chunks[1].text
+    assert (chunks[1].start_line, chunks[1].end_line) == (11, 14)
 
 
 def test_iter_wiki_markdown_files_excludes_navigation_and_vector_dir(tmp_path):
@@ -73,4 +74,31 @@ def test_iter_wiki_markdown_files_excludes_navigation_and_vector_dir(tmp_path):
     assert [p.relative_to(tmp_path).as_posix() for p in with_raw] == [
         "concepts/a.md",
         "raw/transcripts/r.md",
+    ]
+
+def test_chunk_document_tracks_line_range_for_heading_sections():
+    doc = parse_markdown(Path("concepts/runbook.md"), """---
+title: Runbook
+type: concept
+---
+
+# Runbook
+
+Intro paragraph.
+
+## Runtime setup
+
+Use deployment DLLs.
+
+## NPU verification
+
+Use xrt-smi.
+""")
+
+    chunks = chunk_document(doc)
+
+    assert [(c.heading, c.start_line, c.end_line) for c in chunks] == [
+        ("Runbook", 6, 9),
+        ("Runtime setup", 10, 13),
+        ("NPU verification", 14, 16),
     ]

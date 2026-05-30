@@ -9,11 +9,15 @@ Current backend: `lancedb-hybrid` under `<wiki>/.vector/`.
 - Dense vector candidate retrieval: LanceDB table at `<wiki>/.vector/lancedb`.
 - Local offline embedder: `hashing-ngram-256` for deterministic vectors without
   model downloads.
+- Swappable model execution backends: `hashing-ngram` by default, with optional
+  `openvino-bge-m3` for `BAAI/bge-m3` on Intel OpenVINO devices such as `NPU`.
 - Lexical retrieval: local BM25 over the same Markdown heading chunks.
 - Fusion: `0.65 * vector_score + 0.35 * bm25_score` after score normalization.
 
-The embedder is intentionally swappable. A later `bge-m3`/sentence-transformer
-backend can replace `HashingNgramEmbedder` without changing CLI/MCP tool names.
+The embedder is intentionally swappable. `HashingNgramEmbedder` and
+`OpenVINOBgeM3Embedder` both implement the same small `Embedder` protocol, so a
+later sentence-transformer, remote inference, or other OpenVINO model backend can
+be added without changing CLI/MCP tool names or the LanceDB/BM25 fusion layer.
 
 ## Install / run locally
 
@@ -24,21 +28,67 @@ cd /workspace/wiki-vector
 uv run python -m pytest -q
 uv run wiki-vector --wiki /workspace/llm-wiki index
 uv run wiki-vector --wiki /workspace/llm-wiki search "Gemma4 RyzenAI GQO" --json
-uv run wiki-vector --wiki /workspace/llm-wiki read concepts/gemma4-ryzenai-runtime-171-runbook.md --heading "NPU verification"
+uv run wiki-vector --wiki /workspace/llm-wiki read concepts/gemma4/runtime/ryzenai-runtime-171-runbook.md --heading "NPU verification"
+uv run wiki-vector --wiki /workspace/llm-wiki read concepts/wiki-vector/mcp.md --start-line 141 --end-line 157 --json
+uv run wiki-vector --wiki /workspace/llm-wiki is-verbose concepts/wiki-vector/mcp.md --json
+uv run wiki-vector --wiki /workspace/llm-wiki verbosity-audit --limit 20 --json
 ```
+
+To build/search with `BAAI/bge-m3` through OpenVINO on Intel NPU, install the
+optional runtime dependencies and select the model backend explicitly:
+
+```bash
+cd /workspace/wiki-vector
+uv sync --extra openvino
+uv run wiki-vector \
+  --wiki /workspace/llm-wiki \
+  --embedding-backend openvino-bge-m3 \
+  --embedding-model BAAI/bge-m3 \
+  --embedding-device NPU \
+  index
+uv run wiki-vector \
+  --wiki /workspace/llm-wiki \
+  --embedding-backend openvino-bge-m3 \
+  --embedding-model BAAI/bge-m3 \
+  --embedding-device NPU \
+  search "wiki-vector verbosity methodology" --json
+```
+
+Equivalent MCP config uses environment variables so tool names stay stable:
+
+```yaml
+mcp_servers:
+  llm_wiki:
+    command: "uv"
+    args: ["run", "--project", "/workspace/wiki-vector", "wiki-vector-mcp"]
+    env:
+      WIKI_PATH: "/workspace/llm-wiki"
+      WIKI_VECTOR_EMBEDDING_BACKEND: "openvino-bge-m3"
+      WIKI_VECTOR_EMBEDDING_MODEL: "BAAI/bge-m3"
+      WIKI_VECTOR_EMBEDDING_DEVICE: "NPU"
+      WIKI_VECTOR_EMBEDDING_MAX_LENGTH: "2048"
+```
+
+OpenVINO/NPU uses static sequence length before compile to avoid unbounded dynamic
+shape failures in the Intel NPU compiler. Tune `--embedding-max-length` /
+`WIKI_VECTOR_EMBEDDING_MAX_LENGTH` if wiki chunks need longer semantic context.
 
 Index status example:
 
 ```json
 {
   "backend": "lancedb-hybrid",
+  "embedding_backend": "hashing-ngram",
   "embedding_model": "hashing-ngram-256",
+  "embedding_dimensions": 256,
+  "embedding_device": null,
+  "embedding_max_length": null,
   "bm25_weight": 0.35,
   "vector_weight": 0.65
 }
 ```
 
-Search results include both component scores:
+Search results include component scores and exact read-location hints:
 
 ```json
 {
@@ -46,7 +96,10 @@ Search results include both component scores:
   "bm25_score": 6.396262,
   "vector_score": 0.394886,
   "path": "concepts/gemma4-ryzenai-runtime-171-runbook.md",
-  "heading": "Runtime 1.7.1 findings to treat as provisional"
+  "heading": "Runtime 1.7.1 findings to treat as provisional",
+  "start_line": 42,
+  "end_line": 57,
+  "read_hint": "concepts/gemma4-ryzenai-runtime-171-runbook.md#Runtime 1.7.1 findings to treat as provisional lines 42-57"
 }
 ```
 
@@ -71,14 +124,18 @@ mcp_servers:
 
 MCP tools:
 
-- `wiki_search(query, limit=8, include_raw=false)` — returns candidate path/heading/snippet locators.
-- `wiki_read(path, heading=null)` — reads Markdown source of truth.
+- `wiki_search(query, limit=8, include_raw=false)` — returns candidate path/heading/snippet locators plus `start_line`, `end_line`, and `read_hint` for where to read.
+- `wiki_read(path, heading=null, start_line=null, end_line=null)` — reads Markdown source of truth; `start_line`/`end_line` select an inclusive 1-indexed source-file range.
 - `wiki_write(path, content, mode="create", reindex=true)` — creates, overwrites, or appends a Markdown page and optionally rebuilds the index.
 - `wiki_reindex(include_raw=false)` — rebuilds the local LanceDB/BM25 hybrid index.
 - `wiki_status()` — reports index metadata.
+- `wiki_is_verbose(path, include_code=false, compare_to=null)` — analyzes a page for verbosity and returns `is_verbose`, `score`, `severity`, metric details, exact section line ranges, and restructuring suggestions.
+- `wiki_verbosity_audit(limit=20, include_raw=false, severity=null)` — scans curated wiki pages and returns the highest-verbosity candidates sorted by score.
+
+Verbosity policy: `wiki_is_verbose` is advisory, not an automatic rewrite trigger. Agents should inspect `reasons`, `sections[].start_line/end_line`, and `suggestions` before deciding whether to create a hub page, split by heading, archive chronology, or add wikilinks.
 
 Policy: `wiki_search` results are locators, not authoritative evidence. Agents
-should call `wiki_read` on the returned path/heading before answering.
+should call `wiki_read` on the returned path/heading or returned line range before answering.
 
 ## Scope
 
