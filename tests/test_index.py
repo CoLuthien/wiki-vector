@@ -195,3 +195,59 @@ def test_verbosity_audit_sorts_verbose_pages_first(tmp_path):
 
     assert results[0].path == "concepts/long.md"
     assert "line_count_percentile" in results[0].metrics
+
+class LocationAwareEmbedder:
+    backend = "location-aware"
+    model_name = "location-aware-3"
+    dimensions = 3
+    max_length = 8
+
+    def __init__(self):
+        self.embed_many_calls = []
+        self.embed_calls = []
+
+    def embed(self, text: str) -> list[float]:
+        self.embed_calls.append(text)
+        if "needle" in text:
+            return [0.0, 1.0, 0.0]
+        return [1.0, 0.0, 0.0]
+
+    def embed_many(self, texts):
+        self.embed_many_calls.append(list(texts))
+        return [self.embed(text) for text in texts]
+
+
+def test_neural_vector_index_splits_long_sections_into_locator_subchunks(tmp_path):
+    wiki = make_wiki(tmp_path)
+    long_lines = [
+        "alpha beta gamma delta epsilon zeta eta theta.",
+        "iota kappa lambda mu nu xi omicron pi.",
+        "rho sigma tau upsilon phi chi psi omega.",
+        "needle cache reuse operator location marker.",
+    ]
+    (wiki / "concepts" / "long-section.md").write_text("""---
+title: Long Section
+type: concept
+tags: [wiki]
+---
+
+# Long Section
+
+## Big Section
+
+""" + "\n".join(long_lines) + "\n")
+    embedder = LocationAwareEmbedder()
+    index = WikiIndex(wiki, embedder=embedder)
+
+    status = index.reindex(include_raw=False)
+    results = index.search("needle", limit=1)
+
+    embedded_texts = embedder.embed_many_calls[0]
+    assert len(embedded_texts) > status.chunks_indexed
+    assert any("needle cache reuse" in text for text in embedded_texts)
+    assert results[0].path == "concepts/long-section.md"
+    assert results[0].heading == "Big Section"
+    assert results[0].start_line == 14
+    assert results[0].end_line == 14
+    assert "needle" in results[0].snippet
+    assert results[0].read_hint == "concepts/long-section.md#Big Section lines 14-14"

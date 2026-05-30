@@ -13,6 +13,11 @@ Current backend: `lancedb-hybrid` under `<wiki>/.vector/`.
   `openvino-bge-m3` for `BAAI/bge-m3` on Intel OpenVINO devices such as `NPU`.
 - Lexical retrieval: local BM25 over the same Markdown heading chunks.
 - Fusion: `0.65 * vector_score + 0.35 * bm25_score` after score normalization.
+- For fixed-window neural embedders such as `openvino-bge-m3`, long Markdown
+  heading chunks are split into additional vector-only line-range rows before
+  embedding. This avoids silently losing everything after
+  `--embedding-max-length`; search results point at the matching subchunk line
+  range while `read --heading` still returns the full source section.
 
 The embedder is intentionally swappable. `HashingNgramEmbedder` and
 `OpenVINOBgeM3Embedder` both implement the same small `Embedder` protocol, so a
@@ -72,8 +77,10 @@ mcp_servers:
 ```
 
 OpenVINO/NPU uses static sequence length before compile to avoid unbounded dynamic
-shape failures in the Intel NPU compiler. Tune `--embedding-max-length` /
-`WIKI_VECTOR_EMBEDDING_MAX_LENGTH` if wiki chunks need longer semantic context.
+shape failures in the Intel NPU compiler. `--embedding-max-length` /
+`WIKI_VECTOR_EMBEDDING_MAX_LENGTH` controls the maximum model window and also the
+target size for vector-only locator subchunks. Long heading sections are embedded
+as multiple rows instead of being represented only by the first model window.
 
 Index status example:
 

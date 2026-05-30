@@ -109,6 +109,7 @@ class WikiIndex:
         self.lancedb_dir.mkdir(parents=True, exist_ok=True)
         chunks: list[Chunk] = []
         rows: list[dict[str, Any]] = []
+        vector_rows: list[dict[str, Any]] = []
         vector_texts: list[str] = []
         pages = 0
         files_meta: dict[str, dict] = {}
@@ -124,20 +125,22 @@ class WikiIndex:
             for chunk in doc_chunks:
                 row = chunk.to_dict()
                 rows.append(row)
-                vector_texts.append(_searchable_text(row))
+                for vector_row in _vector_rows_for_chunk(row, max_tokens=getattr(self.embedder, "max_length", None)):
+                    vector_rows.append(vector_row)
+                    vector_texts.append(_searchable_text(vector_row))
 
-        if rows:
+        if vector_rows:
             vectors = self.embedder.embed_many(vector_texts)
-            if len(vectors) != len(rows):
-                raise RuntimeError(f"embedder returned {len(vectors)} vectors for {len(rows)} rows")
-            for row, vector in zip(rows, vectors):
+            if len(vectors) != len(vector_rows):
+                raise RuntimeError(f"embedder returned {len(vectors)} vectors for {len(vector_rows)} rows")
+            for row, vector in zip(vector_rows, vectors):
                 row["vector"] = vector
 
         with self.chunks_file.open("w", encoding="utf-8") as f:
             for chunk in chunks:
                 f.write(json.dumps(chunk.to_dict(), ensure_ascii=False) + "\n")
 
-        self._write_lancedb(rows)
+        self._write_lancedb(vector_rows)
         status = IndexStatus(
             wiki_path=str(self.wiki_path),
             backend=BACKEND,
@@ -208,13 +211,13 @@ class WikiIndex:
             return []
 
         bm25_scores = _bm25_scores(query, filtered)
-        vector_scores = self._vector_scores(query, filtered, include_raw=include_raw, types=types, tags=tags, limit=max(50, limit * 10))
+        vector_scores, vector_hits = self._vector_scores(query, filtered, include_raw=include_raw, types=types, tags=tags, limit=max(50, limit * 10))
         bm25_norm = _normalize_scores(bm25_scores)
         vector_norm = _normalize_scores(vector_scores)
         candidate_ids = set(bm25_scores) | set(vector_scores)
 
         results: list[SearchResult] = []
-        by_id = {c["id"]: c for c in filtered}
+        by_id = {c["id"]: c for c in filtered} | vector_hits
         for cid in candidate_ids:
             chunk = by_id.get(cid)
             if not chunk:
@@ -373,7 +376,7 @@ class WikiIndex:
         types: list[str] | None,
         tags: list[str] | None,
         limit: int,
-    ) -> dict[str, float]:
+    ) -> tuple[dict[str, float], dict[str, dict]]:
         try:
             import lancedb
 
@@ -392,13 +395,16 @@ class WikiIndex:
 
         allowed = {c["id"] for c in chunks if _passes_filters(c, include_raw=include_raw, types=types, tags=tags)}
         scores: dict[str, float] = {}
+        hits: dict[str, dict] = {}
         for row in rows:
             cid = row.get("id")
-            if cid not in allowed:
+            parent_id = row.get("parent_id", cid)
+            if parent_id not in allowed:
                 continue
             dist = float(row.get("_distance", 0.0))
             scores[cid] = max(scores.get(cid, 0.0), 1.0 / (1.0 + max(dist, 0.0)))
-        return scores
+            hits[cid] = row
+        return scores, hits
 
 
 def _apply_corpus_calibration(results: list[VerbosityResult]) -> None:
@@ -472,6 +478,72 @@ def _searchable_text(chunk: dict) -> str:
         " ".join(chunk.get("tags") or []),
         chunk.get("text", ""),
     ])
+
+
+def _vector_rows_for_chunk(chunk: dict, max_tokens: Any | None = None) -> list[dict[str, Any]]:
+    """Return embedding rows for a source chunk.
+
+    Source chunks stay heading-sized for BM25 and read-by-heading.  Neural
+    embedders commonly have a fixed sequence length, so long source chunks are
+    split into additional line-range locator rows for vector search instead of
+    being silently truncated to the first model window.
+    """
+    limit = _positive_int(max_tokens)
+    base = dict(chunk)
+    base["parent_id"] = chunk["id"]
+    base["vector_ordinal"] = 0
+    if limit is None or len(_tokens(_searchable_text(base))) <= limit:
+        return [base]
+
+    rows: list[dict[str, Any]] = []
+    current: list[tuple[int, str]] = []
+    current_tokens = 0
+    start_line = int(chunk.get("start_line") or 1)
+    lines = str(chunk.get("text", "")).splitlines()
+
+    def flush() -> None:
+        nonlocal current, current_tokens
+        if not current:
+            return
+        ordinal = len(rows)
+        first_line = current[0][0]
+        last_line = current[-1][0]
+        text = "\n".join(line for _, line in current).strip()
+        if text:
+            row = dict(chunk)
+            row["id"] = f"{chunk['id']}:v{ordinal}"
+            row["parent_id"] = chunk["id"]
+            row["vector_ordinal"] = ordinal
+            row["text"] = text
+            row["start_line"] = first_line
+            row["end_line"] = last_line
+            rows.append(row)
+        current = []
+        current_tokens = 0
+
+    for offset, line in enumerate(lines):
+        line_no = start_line + offset
+        line_tokens = len(_tokens(line))
+        if not line.strip():
+            continue
+        if current and current_tokens + line_tokens > limit:
+            flush()
+        current.append((line_no, line))
+        current_tokens += line_tokens
+        if current_tokens >= limit:
+            flush()
+    flush()
+    return rows or [base]
+
+
+def _positive_int(value: Any | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        integer = int(value)
+    except (TypeError, ValueError):
+        return None
+    return integer if integer > 0 else None
 
 
 def _bm25_scores(query: str, chunks: list[dict]) -> dict[str, float]:
