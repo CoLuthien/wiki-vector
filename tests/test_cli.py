@@ -97,6 +97,8 @@ The same cache reuse topic repeats for reusable operators.
     assert verbose.returncode == 0, verbose.stderr
     data = json.loads(verbose.stdout)
     assert data["semantic"]["enabled"] is True
-    assert data["semantic"]["analyzers"][0]["kind"] == "embedding-semantic"
+    assert data["semantic"]["analyzers"][0]["kind"] == "embedding-semantic-structure"
+    assert data["semantic"]["analyzers"][0]["not_readability_model"] is True
+    assert data["semantic"].get("ml_readability_score") is None
     assert data["semantic"]["caveats"] == ["advisory_only", "not_used_in_default_score"]
     assert "score" in data and "reasons" in data and "sections" in data

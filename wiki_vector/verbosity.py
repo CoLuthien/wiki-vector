@@ -82,6 +82,7 @@ class VerbosityResult:
     suggestions: list[str]
     sections: list[VerboseSection]
     semantic: dict[str, Any] | None = None
+    readability_model: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -242,12 +243,15 @@ def analyze_verbosity(
         reasons.extend(cmp_reasons)
 
     semantic = None
+    readability_model = None
     if readability_analyzers:
         analyses = [
             analyzer.analyze(path=path, text=text, metrics=metrics, sections=sections_raw, compare_to=compare_to)
             for analyzer in readability_analyzers
         ]
-        semantic = merge_readability_analyses(analyses)
+        optional_blocks = merge_readability_analyses(analyses)
+        semantic = optional_blocks.get("semantic")
+        readability_model = optional_blocks.get("readability_model")
 
     score = min(1.0, sum(r.weight for r in reasons))
     if line_count >= profile.warning_line_count and heading_count >= line_count / 60 and max_section_lines < profile.warning_section_lines:
@@ -275,6 +279,7 @@ def analyze_verbosity(
         suggestions=_suggestions(reasons, sections_raw, metrics),
         sections=sorted(section_infos, key=lambda s: s.score, reverse=True),
         semantic=semantic,
+        readability_model=readability_model,
     )
 
 

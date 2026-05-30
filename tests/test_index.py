@@ -179,7 +179,9 @@ The same cache reuse topic repeats for reusable operators.
     data = result.to_dict()
     assert data["semantic"]["enabled"] is True
     assert data["semantic"]["analyzers"][0]["backend"] == "recording"
-    assert data["semantic"]["analyzers"][0]["kind"] == "embedding-semantic"
+    assert data["semantic"]["analyzers"][0]["kind"] == "embedding-semantic-structure"
+    assert data["semantic"]["analyzers"][0]["not_readability_model"] is True
+    assert data["semantic"].get("ml_readability_score") is None
     assert "reasons" in data and "sections" in data
 
 

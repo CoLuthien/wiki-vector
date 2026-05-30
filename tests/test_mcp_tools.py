@@ -92,6 +92,8 @@ def test_mcp_wiki_is_verbose_semantic_option_returns_advisory_block(tmp_path):
     result = wiki_is_verbose(str(wiki), "concepts/runbook.md", semantic=True)
 
     assert result["semantic"]["enabled"] is True
-    assert result["semantic"]["analyzers"][0]["kind"] == "embedding-semantic"
+    assert result["semantic"]["analyzers"][0]["kind"] == "embedding-semantic-structure"
+    assert result["semantic"]["analyzers"][0]["not_readability_model"] is True
+    assert result["semantic"].get("ml_readability_score") is None
     assert result["semantic"]["caveats"] == ["advisory_only", "not_used_in_default_score"]
     assert "score" in result and "reasons" in result

@@ -67,7 +67,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_verbose.add_argument("path")
     p_verbose.add_argument("--include-code", action="store_true", help="Include code blocks in readability/redundancy metrics")
     p_verbose.add_argument("--compare-to", help="Compare original PATH to a compact rewrite path")
-    p_verbose.add_argument("--semantic", action="store_true", help="Add optional embedding-backed semantic readability analysis")
+    p_verbose.add_argument("--semantic", action="store_true", help="Add optional embedding-backed semantic structure proxy analysis")
+    p_verbose.add_argument("--readability-model", help="Optional Transformers model explicitly trained for readability/text-complexity classification/regression")
     p_verbose.add_argument("--json", action="store_true")
 
     p_audit = sub.add_parser("verbosity-audit", help="List highest-verbosity pages in the wiki")
@@ -114,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
             print(result.content)
         return 0
     if args.command == "is-verbose":
-        result = index.is_verbose(args.path, include_code=args.include_code, compare_to=args.compare_to, semantic=args.semantic)
+        result = index.is_verbose(args.path, include_code=args.include_code, compare_to=args.compare_to, semantic=args.semantic, readability_model=args.readability_model)
         if args.json:
             _print_json(result.to_dict())
         else:
