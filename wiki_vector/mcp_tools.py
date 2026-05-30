@@ -34,9 +34,9 @@ def wiki_status(wiki_path: str) -> dict:
     return WikiIndex(wiki_path).status().to_dict()
 
 
-def wiki_is_verbose(wiki_path: str, path: str, include_code: bool = False, compare_to: str | None = None) -> dict:
-    """Analyze whether a Markdown wiki page is verbose and return metrics, reasons, sections, and suggestions."""
-    return WikiIndex(wiki_path).is_verbose(path, include_code=include_code, compare_to=compare_to).to_dict()
+def wiki_is_verbose(wiki_path: str, path: str, include_code: bool = False, compare_to: str | None = None, semantic: bool = False) -> dict:
+    """Analyze whether a Markdown wiki page is verbose and optionally add advisory semantic readability metrics."""
+    return WikiIndex(wiki_path).is_verbose(path, include_code=include_code, compare_to=compare_to, semantic=semantic).to_dict()
 
 
 def wiki_verbosity_audit(wiki_path: str, limit: int = 20, include_raw: bool = False, severity: str | None = None) -> dict:

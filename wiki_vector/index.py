@@ -12,6 +12,7 @@ from typing import Any
 from .chunking import Chunk, chunk_document
 from .embeddings import Embedder, create_embedder
 from .markdown import iter_wiki_markdown_files, parse_markdown
+from .readability import EmbeddingSemanticReadabilityAnalyzer, ReadabilityAnalysisConfig
 from .verbosity import VerbosityResult, analyze_verbosity
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_./:\\-]+|[가-힣]+")
@@ -272,14 +273,17 @@ class WikiIndex:
                 )
         raise ValueError(f"heading not found: {heading}")
 
-    def is_verbose(self, path: str, *, include_code: bool = False, compare_to: str | None = None) -> VerbosityResult:
+    def is_verbose(self, path: str, *, include_code: bool = False, compare_to: str | None = None, semantic: bool = False) -> VerbosityResult:
         rel = self._safe_markdown_path(path)
         text = (self.wiki_path / rel).read_text(encoding="utf-8")
         compare_text = None
         if compare_to is not None:
             compare_rel = self._safe_markdown_path(compare_to)
             compare_text = (self.wiki_path / compare_rel).read_text(encoding="utf-8")
-        return analyze_verbosity(rel.as_posix(), text, include_code=include_code, compare_to=compare_text)
+        analyzers = None
+        if semantic:
+            analyzers = [EmbeddingSemanticReadabilityAnalyzer(self.embedder, ReadabilityAnalysisConfig(compare_to=compare_text))]
+        return analyze_verbosity(rel.as_posix(), text, include_code=include_code, compare_to=compare_text, readability_analyzers=analyzers)
 
     def verbosity_audit(self, *, limit: int = 20, include_raw: bool = False, severity: str | None = None) -> list[VerbosityResult]:
         if severity is not None and severity not in {"ok", "warning", "high"}:

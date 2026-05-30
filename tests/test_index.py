@@ -159,6 +159,30 @@ def test_is_verbose_uses_safe_paths_and_returns_analysis(tmp_path):
     assert result.metrics["line_count"] >= 300
 
 
+def test_is_verbose_semantic_mode_uses_index_embedder_without_blending_score(tmp_path):
+    wiki = make_wiki(tmp_path)
+    (wiki / "concepts" / "semantic.md").write_text("""# Semantic
+
+## Cache reuse
+
+Cache reuse keeps operators reusable.
+
+## Cache again
+
+The same cache reuse topic repeats for reusable operators.
+""")
+    embedder = RecordingEmbedder()
+    index = WikiIndex(wiki, embedder=embedder)
+
+    result = index.is_verbose("concepts/semantic.md", semantic=True)
+
+    data = result.to_dict()
+    assert data["semantic"]["enabled"] is True
+    assert data["semantic"]["analyzers"][0]["backend"] == "recording"
+    assert data["semantic"]["analyzers"][0]["kind"] == "embedding-semantic"
+    assert "reasons" in data and "sections" in data
+
+
 def test_verbosity_audit_sorts_verbose_pages_first(tmp_path):
     wiki = make_wiki(tmp_path)
     (wiki / "concepts" / "short.md").write_text("# Short\n\nSmall.")

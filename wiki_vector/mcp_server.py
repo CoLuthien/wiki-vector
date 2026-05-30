@@ -55,9 +55,9 @@ def main() -> None:
         return wiki_status(_wiki_path(wiki_path))
 
     @mcp.tool(name="wiki_is_verbose")
-    def wiki_is_verbose_tool(path: str, include_code: bool = False, compare_to: str | None = None, wiki_path: str | None = None) -> dict[str, Any]:
-        """Analyze whether a wiki page is verbose; returns score, reasons, metrics, sections, and suggestions."""
-        return wiki_is_verbose(_wiki_path(wiki_path), path=path, include_code=include_code, compare_to=compare_to)
+    def wiki_is_verbose_tool(path: str, include_code: bool = False, compare_to: str | None = None, semantic: bool = False, wiki_path: str | None = None) -> dict[str, Any]:
+        """Analyze whether a wiki page is verbose; optionally include advisory embedding-backed semantic readability metrics."""
+        return wiki_is_verbose(_wiki_path(wiki_path), path=path, include_code=include_code, compare_to=compare_to, semantic=semantic)
 
     @mcp.tool(name="wiki_verbosity_audit")
     def wiki_verbosity_audit_tool(limit: int = 20, include_raw: bool = False, severity: str | None = None, wiki_path: str | None = None) -> dict[str, Any]:

@@ -31,6 +31,7 @@ uv run wiki-vector --wiki /workspace/llm-wiki search "Gemma4 RyzenAI GQO" --json
 uv run wiki-vector --wiki /workspace/llm-wiki read concepts/gemma4/runtime/ryzenai-runtime-171-runbook.md --heading "NPU verification"
 uv run wiki-vector --wiki /workspace/llm-wiki read concepts/wiki-vector/mcp.md --start-line 141 --end-line 157 --json
 uv run wiki-vector --wiki /workspace/llm-wiki is-verbose concepts/wiki-vector/mcp.md --json
+uv run wiki-vector --wiki /workspace/llm-wiki is-verbose concepts/wiki-vector/mcp.md --semantic --json
 uv run wiki-vector --wiki /workspace/llm-wiki verbosity-audit --limit 20 --json
 ```
 
@@ -129,10 +130,10 @@ MCP tools:
 - `wiki_write(path, content, mode="create", reindex=true)` — creates, overwrites, or appends a Markdown page and optionally rebuilds the index.
 - `wiki_reindex(include_raw=false)` — rebuilds the local LanceDB/BM25 hybrid index.
 - `wiki_status()` — reports index metadata.
-- `wiki_is_verbose(path, include_code=false, compare_to=null)` — analyzes a page for verbosity and returns `is_verbose`, `score`, `severity`, metric details, exact section line ranges, and restructuring suggestions.
+- `wiki_is_verbose(path, include_code=false, compare_to=null, semantic=false)` — analyzes a page for verbosity and returns `is_verbose`, `score`, `severity`, metric details, exact section line ranges, and restructuring suggestions. With `semantic=true`, it also returns a separate advisory `semantic` block from the configured embedder; this does not change the deterministic `score`.
 - `wiki_verbosity_audit(limit=20, include_raw=false, severity=null)` — scans curated wiki pages and returns the highest-verbosity candidates sorted by score.
 
-Verbosity policy: `wiki_is_verbose` is advisory, not an automatic rewrite trigger. Agents should inspect `reasons`, `sections[].start_line/end_line`, and `suggestions` before deciding whether to create a hub page, split by heading, archive chronology, or add wikilinks.
+Verbosity policy: `wiki_is_verbose` is advisory, not an automatic rewrite trigger. Agents should inspect `reasons`, `sections[].start_line/end_line`, and `suggestions` before deciding whether to create a hub page, split by heading, archive chronology, or add wikilinks. Semantic mode follows the same policy: embedding/neural scores (`ml_readability_score`, `coherence_score`, `semantic_redundancy_score`, `rewrite_preservation_score`) are reported under `semantic` as `advisory_only` and `not_used_in_default_score` until local labeled calibration data exists.
 
 Policy: `wiki_search` results are locators, not authoritative evidence. Agents
 should call `wiki_read` on the returned path/heading or returned line range before answering.

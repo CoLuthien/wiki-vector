@@ -84,3 +84,14 @@ def test_mcp_verbosity_tools_return_serializable_dicts(tmp_path):
     assert result["metrics"]["line_count"] >= 200
     assert audit["count"] == 2
     assert audit["results"][0]["path"] == "concepts/long.md"
+
+
+def test_mcp_wiki_is_verbose_semantic_option_returns_advisory_block(tmp_path):
+    wiki = make_wiki(tmp_path)
+
+    result = wiki_is_verbose(str(wiki), "concepts/runbook.md", semantic=True)
+
+    assert result["semantic"]["enabled"] is True
+    assert result["semantic"]["analyzers"][0]["kind"] == "embedding-semantic"
+    assert result["semantic"]["caveats"] == ["advisory_only", "not_used_in_default_score"]
+    assert "score" in result and "reasons" in result

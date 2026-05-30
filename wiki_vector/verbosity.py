@@ -6,9 +6,10 @@ import gzip
 import math
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from .markdown import parse_markdown
+from .readability import ReadabilityAnalyzer, merge_readability_analyses
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_./:\\-]+|[가-힣]+")
@@ -80,6 +81,7 @@ class VerbosityResult:
     reasons: list[VerbosityReason]
     suggestions: list[str]
     sections: list[VerboseSection]
+    semantic: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -113,6 +115,7 @@ def analyze_verbosity(
     profile: VerbosityProfile | None = None,
     include_code: bool = False,
     compare_to: str | None = None,
+    readability_analyzers: Sequence[ReadabilityAnalyzer] | None = None,
 ) -> VerbosityResult:
     profile = profile or VerbosityProfile()
     doc = parse_markdown(Path(path), text)
@@ -238,6 +241,14 @@ def analyze_verbosity(
         metrics.update(cmp_metrics)
         reasons.extend(cmp_reasons)
 
+    semantic = None
+    if readability_analyzers:
+        analyses = [
+            analyzer.analyze(path=path, text=text, metrics=metrics, sections=sections_raw, compare_to=compare_to)
+            for analyzer in readability_analyzers
+        ]
+        semantic = merge_readability_analyses(analyses)
+
     score = min(1.0, sum(r.weight for r in reasons))
     if line_count >= profile.warning_line_count and heading_count >= line_count / 60 and max_section_lines < profile.warning_section_lines:
         score = max(0.0, score - 0.08)
@@ -263,6 +274,7 @@ def analyze_verbosity(
         reasons=reasons,
         suggestions=_suggestions(reasons, sections_raw, metrics),
         sections=sorted(section_infos, key=lambda s: s.score, reverse=True),
+        semantic=semantic,
     )
 
 

@@ -77,3 +77,26 @@ def test_cli_is_verbose_and_verbosity_audit_json(tmp_path):
     audit_data = json.loads(audit.stdout)
     assert audit_data["results"][0]["path"] == "concepts/long.md"
     assert "VERBOSE" in human.stdout
+
+
+def test_cli_is_verbose_semantic_json_preserves_deterministic_fields(tmp_path):
+    wiki = make_wiki(tmp_path)
+    (wiki / "concepts" / "semantic.md").write_text("""# Semantic
+
+## Cache reuse
+
+Cache reuse keeps operators reusable.
+
+## Cache again
+
+The same cache reuse topic repeats for reusable operators.
+""")
+
+    verbose = run_cli("--wiki", str(wiki), "is-verbose", "concepts/semantic.md", "--semantic", "--json")
+
+    assert verbose.returncode == 0, verbose.stderr
+    data = json.loads(verbose.stdout)
+    assert data["semantic"]["enabled"] is True
+    assert data["semantic"]["analyzers"][0]["kind"] == "embedding-semantic"
+    assert data["semantic"]["caveats"] == ["advisory_only", "not_used_in_default_score"]
+    assert "score" in data and "reasons" in data and "sections" in data
