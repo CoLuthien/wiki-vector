@@ -66,7 +66,7 @@ mcp_servers:
       WIKI_VECTOR_EMBEDDING_BACKEND: "openvino-bge-m3"
       WIKI_VECTOR_EMBEDDING_MODEL: "BAAI/bge-m3"
       WIKI_VECTOR_EMBEDDING_DEVICE: "NPU"
-      WIKI_VECTOR_EMBEDDING_MAX_LENGTH: "2048"
+      WIKI_VECTOR_EMBEDDING_MAX_LENGTH: "512"
 ```
 
 OpenVINO/NPU uses static sequence length before compile to avoid unbounded dynamic

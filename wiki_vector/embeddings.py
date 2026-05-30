@@ -35,13 +35,13 @@ class EmbeddingConfig:
     device: str | None = None
     batch_size: int = 8
     cache_dir: str | None = None
-    max_length: int = 2048
+    max_length: int = 512
 
     @classmethod
     def from_env(cls) -> "EmbeddingConfig":
         dimensions = _env_int("WIKI_VECTOR_EMBEDDING_DIMENSIONS")
         batch_size = _env_int("WIKI_VECTOR_EMBEDDING_BATCH_SIZE") or 8
-        max_length = _env_int("WIKI_VECTOR_EMBEDDING_MAX_LENGTH") or 2048
+        max_length = _env_int("WIKI_VECTOR_EMBEDDING_MAX_LENGTH") or 512
         return cls(
             backend=os.environ.get("WIKI_VECTOR_EMBEDDING_BACKEND", "hashing-ngram"),
             model_name=os.environ.get("WIKI_VECTOR_EMBEDDING_MODEL"),
@@ -154,7 +154,7 @@ class OpenVINOBgeM3Embedder:
         device: str = "NPU",
         batch_size: int = 8,
         cache_dir: str | None = None,
-        max_length: int = 2048,
+        max_length: int = 512,
     ):
         self.model_name = model_name
         self.device = device

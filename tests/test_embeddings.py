@@ -3,13 +3,13 @@ import pytest
 from wiki_vector.embeddings import EmbeddingConfig, HashingNgramEmbedder, OpenVINOBgeM3Embedder, create_embedder
 
 
-def test_openvino_bge_m3_default_max_length_is_2048():
+def test_openvino_bge_m3_default_max_length_is_512():
     config = EmbeddingConfig(backend="openvino-bge-m3")
     embedder = create_embedder(config)
 
     assert isinstance(embedder, OpenVINOBgeM3Embedder)
-    assert config.max_length == 2048
-    assert embedder.max_length == 2048
+    assert config.max_length == 512
+    assert embedder.max_length == 512
 
 
 def test_create_default_hashing_embedder_from_config():

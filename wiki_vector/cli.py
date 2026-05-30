@@ -40,7 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--embedding-dimensions", type=int, help="Vector dimensions for hashing-ngram backend")
     parser.add_argument("--embedding-batch-size", type=int, help="Batch size for model-backed embedders")
     parser.add_argument("--embedding-cache-dir", help="Optional model/cache directory for model-backed embedders")
-    parser.add_argument("--embedding-max-length", type=int, help="Static sequence length for model-backed embedders (default: 2048)")
+    parser.add_argument("--embedding-max-length", type=int, help="Static sequence length for model-backed embedders (default: 512)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_index = sub.add_parser("index", help="Build or refresh the local index")
