@@ -23,6 +23,11 @@ The embedder is intentionally swappable. `HashingNgramEmbedder` and
 `OpenVINOBgeM3Embedder` both implement the same small `Embedder` protocol, so a
 later sentence-transformer, remote inference, or other OpenVINO model backend can
 be added without changing CLI/MCP tool names or the LanceDB/BM25 fusion layer.
+Model-backed embedders are cached by a process-local `EmbeddingRuntimeCache`
+outside `WikiIndex`, so long-lived MCP/server processes can reuse the same
+OpenVINO/bge runtime across repeated `WikiIndex` instances. A one-shot CLI
+process still has to create its process-local runtime on each invocation; use a
+long-lived MCP/server process for repeated neural searches.
 
 ## Install / run locally
 

@@ -1,6 +1,6 @@
 import pytest
 
-from wiki_vector.embeddings import EmbeddingConfig, HashingNgramEmbedder, OpenVINOBgeM3Embedder, create_embedder
+from wiki_vector.embeddings import EmbeddingConfig, HashingNgramEmbedder, OpenVINOBgeM3Embedder, clear_embedder_cache, create_embedder
 
 
 def test_openvino_bge_m3_default_max_length_is_512():
@@ -47,3 +47,20 @@ def test_create_openvino_bge_m3_embedder_is_lazy():
 def test_unknown_embedding_backend_fails_fast():
     with pytest.raises(ValueError, match="unknown embedding backend"):
         create_embedder(EmbeddingConfig(backend="does-not-exist"))
+
+def test_openvino_bge_m3_embedder_is_cached_outside_wiki_index():
+    clear_embedder_cache()
+    config = EmbeddingConfig(
+        backend="openvino-bge-m3",
+        model_name="BAAI/bge-m3",
+        device="NPU",
+        batch_size=1,
+        max_length=512,
+    )
+
+    first = create_embedder(config)
+    second = create_embedder(config)
+
+    assert first is second
+    assert isinstance(first, OpenVINOBgeM3Embedder)
+    clear_embedder_cache()

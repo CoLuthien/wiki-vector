@@ -5,6 +5,7 @@ import hashlib
 import math
 import os
 import re
+import threading
 from typing import Any, Protocol, Sequence, cast
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_./:\\-]+|[가-힣]+")
@@ -53,20 +54,73 @@ class EmbeddingConfig:
         )
 
 
+@dataclass(frozen=True)
+class _EmbedderCacheKey:
+    backend: str
+    model_name: str
+    device: str
+    batch_size: int
+    cache_dir: str | None
+    max_length: int
+
+
+class EmbeddingRuntimeCache:
+    """Process-local cache for heavyweight model-backed embedder runtimes."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._embedders: dict[_EmbedderCacheKey, Embedder] = {}
+
+    def get_or_create(self, key: _EmbedderCacheKey) -> Embedder:
+        with self._lock:
+            cached = self._embedders.get(key)
+            if cached is not None:
+                return cached
+            embedder = OpenVINOBgeM3Embedder(
+                model_name=key.model_name,
+                device=key.device,
+                batch_size=key.batch_size,
+                cache_dir=key.cache_dir,
+                max_length=key.max_length,
+            )
+            self._embedders[key] = embedder
+            return embedder
+
+    def clear(self) -> None:
+        with self._lock:
+            self._embedders.clear()
+
+
+_EMBEDDER_CACHE = EmbeddingRuntimeCache()
+
+
 def create_embedder(config: EmbeddingConfig | None = None) -> Embedder:
     config = config or EmbeddingConfig.from_env()
     backend = _normalize_backend(config.backend)
     if backend in {"hashing-ngram", "hashing", "hashing-ngram-256"}:
         return HashingNgramEmbedder(dimensions=config.dimensions or 256)
     if backend in {"openvino-bge-m3", "openvino", "bge-m3-openvino"}:
-        return OpenVINOBgeM3Embedder(
-            model_name=config.model_name or "BAAI/bge-m3",
-            device=config.device or "NPU",
-            batch_size=config.batch_size,
-            cache_dir=config.cache_dir,
-            max_length=config.max_length,
+        return _EMBEDDER_CACHE.get_or_create(
+            _EmbedderCacheKey(
+                backend="openvino-bge-m3",
+                model_name=config.model_name or "BAAI/bge-m3",
+                device=config.device or "NPU",
+                batch_size=config.batch_size,
+                cache_dir=config.cache_dir,
+                max_length=config.max_length,
+            )
         )
     raise ValueError(f"unknown embedding backend: {config.backend}")
+
+
+def clear_embedder_cache() -> None:
+    """Clear process-local model-backed embedder cache.
+
+    This is primarily for tests and long-lived MCP workers that need to reset
+    runtime state after configuration changes.  Hashing embedders are cheap and
+    are intentionally not cached.
+    """
+    _EMBEDDER_CACHE.clear()
 
 
 def embedding_config_from_args(
