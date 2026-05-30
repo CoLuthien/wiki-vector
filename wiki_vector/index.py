@@ -202,6 +202,7 @@ class WikiIndex:
         if not chunks:
             self.reindex(include_raw=include_raw)
             chunks = self._load_chunks()
+        self._ensure_embedder_matches_index()
         q_terms = _tokens(query)
         if not q_terms:
             return []
@@ -367,6 +368,32 @@ class WikiIndex:
                 db.drop_table(self.table_name)
             except Exception:
                 pass
+
+    def _ensure_embedder_matches_index(self) -> None:
+        if not self.manifest_file.exists():
+            return
+        data = json.loads(self.manifest_file.read_text(encoding="utf-8"))
+        expected = {
+            "backend": data.get("embedding_backend"),
+            "model": data.get("embedding_model"),
+            "dimensions": int(data.get("embedding_dimensions", 0) or 0),
+            "max_length": data.get("embedding_max_length"),
+        }
+        actual = {
+            "backend": getattr(self.embedder, "backend", self.embedder.__class__.__name__),
+            "model": self.embedder.model_name,
+            "dimensions": int(getattr(self.embedder, "dimensions", 0) or 0),
+            "max_length": getattr(self.embedder, "max_length", None),
+        }
+        mismatches = [key for key in expected if expected[key] != actual[key]]
+        if mismatches:
+            details = ", ".join(
+                f"{key}: indexed={expected[key]!r} current={actual[key]!r}" for key in mismatches
+            )
+            raise ValueError(
+                "embedding backend mismatch; reindex with the same embedding options before search "
+                f"({details})"
+            )
 
     def _vector_scores(
         self,

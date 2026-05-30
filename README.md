@@ -81,6 +81,10 @@ shape failures in the Intel NPU compiler. `--embedding-max-length` /
 `WIKI_VECTOR_EMBEDDING_MAX_LENGTH` controls the maximum model window and also the
 target size for vector-only locator subchunks. Long heading sections are embedded
 as multiple rows instead of being represented only by the first model window.
+Search must use the same embedding backend/model/dimensions/max-length that built
+the index. If these options differ, `wiki-vector search` exits with an embedding
+mismatch error instead of falling back to expensive per-chunk re-embedding. Re-run
+`wiki-vector ... index` with the desired embedding options before searching.
 
 Index status example:
 

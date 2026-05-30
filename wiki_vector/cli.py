@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -99,7 +100,11 @@ def main(argv: list[str] | None = None) -> int:
         _print_json(index.status().to_dict())
         return 0
     if args.command == "search":
-        results = index.search(args.query, limit=args.limit, include_raw=args.include_raw, types=args.types, tags=args.tags)
+        try:
+            results = index.search(args.query, limit=args.limit, include_raw=args.include_raw, types=args.types, tags=args.tags)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
         data = [r.to_dict() for r in results]
         if args.json:
             print(json.dumps(data, ensure_ascii=False))

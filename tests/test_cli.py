@@ -102,3 +102,18 @@ The same cache reuse topic repeats for reusable operators.
     assert data["semantic"].get("ml_readability_score") is None
     assert data["semantic"]["caveats"] == ["advisory_only", "not_used_in_default_score"]
     assert "score" in data and "reasons" in data and "sections" in data
+
+def test_cli_search_reports_embedder_mismatch_without_traceback(tmp_path):
+    wiki = make_wiki(tmp_path)
+    indexed = run_cli("--wiki", str(wiki), "index")
+    search = run_cli(
+        "--wiki", str(wiki),
+        "--embedding-backend", "hashing-ngram",
+        "--embedding-dimensions", "32",
+        "search", "verify NPU", "--json",
+    )
+
+    assert indexed.returncode == 0, indexed.stderr
+    assert search.returncode == 2
+    assert "embedding backend mismatch" in search.stderr
+    assert "Traceback" not in search.stderr

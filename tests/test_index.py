@@ -251,3 +251,18 @@ tags: [wiki]
     assert results[0].end_line == 14
     assert "needle" in results[0].snippet
     assert results[0].read_hint == "concepts/long-section.md#Big Section lines 14-14"
+
+def test_search_rejects_embedder_mismatch_instead_of_reembedding_all_chunks(tmp_path):
+    wiki = make_wiki(tmp_path)
+    WikiIndex(wiki).reindex(include_raw=False)
+    mismatched = RecordingEmbedder()
+    index = WikiIndex(wiki, embedder=mismatched)
+
+    try:
+        index.search("NPU verification", limit=1)
+    except ValueError as exc:
+        assert "embedding backend mismatch" in str(exc)
+        assert "reindex" in str(exc)
+    else:
+        raise AssertionError("expected embedding mismatch error")
+    assert mismatched.embed_calls == []
