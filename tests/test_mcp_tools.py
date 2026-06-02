@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from wiki_vector.mcp_tools import wiki_is_verbose, wiki_read, wiki_reindex, wiki_search, wiki_status, wiki_verbosity_audit, wiki_write
+from wiki_vector.mcp_tools import wiki_change_summary, wiki_is_verbose, wiki_read, wiki_reindex, wiki_search, wiki_status, wiki_verbosity_audit, wiki_write
 
 
 def make_wiki(tmp_path: Path) -> Path:
@@ -97,3 +97,18 @@ def test_mcp_wiki_is_verbose_semantic_option_returns_advisory_block(tmp_path):
     assert result["semantic"].get("ml_readability_score") is None
     assert result["semantic"]["caveats"] == ["advisory_only", "not_used_in_default_score"]
     assert "score" in result and "reasons" in result
+
+
+def test_mcp_change_summary_reports_pending_and_recorded_changes(tmp_path):
+    wiki = make_wiki(tmp_path)
+
+    baseline = wiki_change_summary(str(wiki), update=True)
+    (wiki / "concepts" / "runbook.md").write_text((wiki / "concepts" / "runbook.md").read_text(encoding="utf-8") + "\nNew changed line.\n", encoding="utf-8")
+    pending = wiki_change_summary(str(wiki), update=False)
+    recorded = wiki_change_summary(str(wiki), update=True)
+
+    assert baseline["event_counts"]["added"] == 1
+    assert pending["pending_events"] == 1
+    assert pending["event_counts"]["modified"] == 1
+    assert recorded["pending_events"] == 1
+    assert recorded["files"][0]["last_diff"]["added_lines"] >= 1

@@ -77,6 +77,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_audit.add_argument("--include-raw", action="store_true")
     p_audit.add_argument("--severity", choices=["ok", "warning", "high"])
     p_audit.add_argument("--json", action="store_true")
+
+    p_changes = sub.add_parser("change-summary", help="Summarize pending/recorded wiki file changes from the SQLite maintenance ledger")
+    p_changes.add_argument("--include-raw", action="store_true")
+    p_changes.add_argument("--update", action="store_true", help="Record pending changes and advance the baseline snapshot")
+    p_changes.add_argument("--since", help="Reserved label/window hint; current summary reports last-baseline pending changes plus total counters")
+    p_changes.add_argument("--change-count-threshold", type=int, default=1)
+    p_changes.add_argument("--byte-threshold", type=int, default=1)
+    p_changes.add_argument("--line-threshold", type=int, default=1)
+    p_changes.add_argument("--json", action="store_true")
     return parser
 
 
@@ -101,16 +110,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "search":
         try:
-            results = index.search(args.query, limit=args.limit, include_raw=args.include_raw, types=args.types, tags=args.tags)
+            raw_results = index.search(args.query, limit=args.limit, include_raw=args.include_raw, types=args.types, tags=args.tags)
+            search_results = [r.to_dict() for r in raw_results]
         except ValueError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 2
-        data = [r.to_dict() for r in results]
         if args.json:
-            print(json.dumps(data, ensure_ascii=False))
+            print(json.dumps(search_results, ensure_ascii=False))
         else:
-            for r in results:
-                print(f"{r.score:.3f}\t{r.path}#{r.heading}\t{r.snippet}")
+            for r in search_results:
+                print(f"{float(r.get('score', 0.0)):.3f}\t{r.get('path')}#{r.get('heading')}\t{r.get('snippet')}")
         return 0
     if args.command == "read":
         result = index.read(args.path, heading=args.heading, start_line=args.start_line, end_line=args.end_line)
@@ -134,6 +143,24 @@ def main(argv: list[str] | None = None) -> int:
         else:
             for result in data["results"]:
                 _print_verbosity(result)
+        return 0
+    if args.command == "change-summary":
+        data = index.change_summary(
+            include_raw=args.include_raw,
+            update=args.update,
+            since=args.since,
+            change_count_threshold=args.change_count_threshold,
+            byte_threshold=args.byte_threshold,
+            line_threshold=args.line_threshold,
+        )
+        if args.json:
+            _print_json(data)
+        else:
+            state = "SIGNIFICANT" if data.get("significant_change") else "quiet"
+            print(f"{state} pending={data.get('pending_events')} total={data.get('total_events')} db={data.get('db_path')}")
+            for row in data.get("files", [])[:10]:
+                diff = row.get("last_diff") or {}
+                print(f"- {row.get('path')} changes={row.get('change_count')} kind={row.get('last_change_kind')} Δbytes={diff.get('byte_delta')} Δlines={diff.get('line_delta')}")
         return 0
     raise AssertionError(args.command)
 

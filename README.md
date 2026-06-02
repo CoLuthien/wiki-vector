@@ -44,6 +44,8 @@ uv run wiki-vector --wiki /workspace/llm-wiki is-verbose concepts/wiki-vector/mc
 uv run wiki-vector --wiki /workspace/llm-wiki is-verbose concepts/wiki-vector/mcp.md --semantic --json
 uv run wiki-vector --wiki /workspace/llm-wiki is-verbose concepts/wiki-vector/mcp.md --readability-model Tymoteusz/distilbert-base-uncased-kaggle-readability --json
 uv run wiki-vector --wiki /workspace/llm-wiki verbosity-audit --limit 20 --json
+uv run wiki-vector --wiki /workspace/llm-wiki change-summary --json
+uv run wiki-vector --wiki /workspace/llm-wiki change-summary --update --change-count-threshold 10 --line-threshold 200 --json
 ```
 
 To build/search with `BAAI/bge-m3` through OpenVINO on Intel NPU, install the
@@ -149,8 +151,11 @@ MCP tools:
 - `wiki_status()` — reports index metadata.
 - `wiki_is_verbose(path, include_code=false, compare_to=null, semantic=false, readability_model=null)` — analyzes a page for verbosity and returns `is_verbose`, `score`, `severity`, metric details, exact section line ranges, and restructuring suggestions. With `semantic=true`, it also returns a separate advisory `semantic` block from the configured embedder; this is a semantic-structure proxy, not a readability model. With `readability_model=<HF model id>`, it returns a separate advisory `readability_model` block from a Transformers text-classification/regression model explicitly trained for readability/text complexity. Neither optional block changes the deterministic `score`.
 - `wiki_verbosity_audit(limit=20, include_raw=false, severity=null)` — scans curated wiki pages and returns the highest-verbosity candidates sorted by score.
+- `wiki_change_summary(include_raw=false, update=false, since=null, change_count_threshold=1, byte_threshold=1, line_threshold=1)` — uses a SQLite maintenance ledger at `<wiki>/.vector/changes.sqlite` to report per-file `change_count`, last change kind, pending added/modified/deleted events, and aggregate byte/line/diff sizes. `update=false` is a dry-run gate for cron jobs; `update=true` records pending changes and advances the baseline snapshot. Raw files are excluded unless `include_raw=true`.
 
 Verbosity policy: `wiki_is_verbose` is advisory, not an automatic rewrite trigger. Agents should inspect `reasons`, `sections[].start_line/end_line`, and `suggestions` before deciding whether to create a hub page, split by heading, archive chronology, or add wikilinks. Semantic mode follows the same policy: embedding/neural proxy scores (`semantic_structure_score`, `coherence_score`, `semantic_redundancy_score`, `rewrite_preservation_score`) are reported under `semantic` as `advisory_only`, `not_used_in_default_score`, and `not_readability_model=true`. Readability model mode is also advisory; raw logits/probabilities need corpus/language calibration before cron automation.
+
+Change-summary policy: use `wiki_change_summary(update=false, change_count_threshold=N, line_threshold=M)` as the cheap cron preflight. If `significant_change` is false, the scheduled wiki cleanup can stay silent. If true, run the restructuring/audit job and finish by calling `wiki_change_summary(update=true, ...)` or `wiki_reindex()` to record the new baseline. This ledger is operational metadata, not a source of truth; Markdown remains authoritative.
 
 Policy: `wiki_search` results are locators, not authoritative evidence. Agents
 should call `wiki_read` on the returned path/heading or returned line range before answering.

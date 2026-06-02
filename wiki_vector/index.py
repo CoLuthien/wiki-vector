@@ -10,6 +10,7 @@ from collections import Counter
 from typing import Any
 
 from .chunking import Chunk, chunk_document
+from .changes import summarize_changes
 from .embeddings import Embedder, create_embedder
 from .markdown import iter_wiki_markdown_files, parse_markdown
 from .readability import EmbeddingSemanticStructureAnalyzer, ReadabilityAnalysis, ReadabilityAnalysisConfig, TransformersReadabilityModelAnalyzer
@@ -99,6 +100,7 @@ class WikiIndex:
         self.wiki_path = Path(wiki_path).expanduser().resolve()
         self.vector_dir = self.wiki_path / ".vector"
         self.lancedb_dir = self.vector_dir / "lancedb"
+        self.change_db_file = self.vector_dir / "changes.sqlite"
         self.chunks_file = self.vector_dir / "chunks.jsonl"
         self.manifest_file = self.vector_dir / "manifest.json"
         self.table_name = "chunks"
@@ -107,6 +109,7 @@ class WikiIndex:
     def reindex(self, include_raw: bool = False) -> IndexStatus:
         self.vector_dir.mkdir(parents=True, exist_ok=True)
         self.lancedb_dir.mkdir(parents=True, exist_ok=True)
+        self.change_summary(include_raw=include_raw, update=True)
         chunks: list[Chunk] = []
         rows: list[dict[str, Any]] = []
         vector_rows: list[dict[str, Any]] = []
@@ -303,6 +306,33 @@ class WikiIndex:
         _apply_corpus_calibration(results)
         results.sort(key=lambda r: (r.score, r.metrics.get("line_count", 0)), reverse=True)
         return results[:limit]
+
+    def change_summary(
+        self,
+        *,
+        include_raw: bool = False,
+        update: bool = False,
+        since: str | None = None,
+        change_count_threshold: int = 1,
+        byte_threshold: int = 1,
+        line_threshold: int = 1,
+    ) -> dict[str, Any]:
+        """Return SQLite-backed file change counters and diff-size summary.
+
+        `since` is reserved for future windowing; the current implementation
+        reports pending changes against the last recorded snapshot plus total
+        per-file counters, which is the useful cron gating signal.
+        """
+        _ = since
+        return summarize_changes(
+            self.wiki_path,
+            self.change_db_file,
+            include_raw=include_raw,
+            update=update,
+            change_count_threshold=change_count_threshold,
+            byte_threshold=byte_threshold,
+            line_threshold=line_threshold,
+        )
 
     def write(self, path: str, content: str, mode: str = "create", reindex: bool = True) -> WriteResult:
         """Write a Markdown wiki page on the local source of truth.

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from .mcp_tools import wiki_is_verbose, wiki_read, wiki_reindex, wiki_search, wiki_status, wiki_verbosity_audit, wiki_write
+from .mcp_tools import wiki_change_summary, wiki_is_verbose, wiki_read, wiki_reindex, wiki_search, wiki_status, wiki_verbosity_audit, wiki_write
 
 
 def _wiki_path(value: str | None = None) -> str:
@@ -63,6 +63,27 @@ def main() -> None:
     def wiki_verbosity_audit_tool(limit: int = 20, include_raw: bool = False, severity: str | None = None, wiki_path: str | None = None) -> dict[str, Any]:
         """Return highest-verbosity wiki pages sorted by score."""
         return wiki_verbosity_audit(_wiki_path(wiki_path), limit=limit, include_raw=include_raw, severity=severity)
+
+    @mcp.tool(name="wiki_change_summary")
+    def wiki_change_summary_tool(
+        include_raw: bool = False,
+        update: bool = False,
+        since: str | None = None,
+        change_count_threshold: int = 1,
+        byte_threshold: int = 1,
+        line_threshold: int = 1,
+        wiki_path: str | None = None,
+    ) -> dict[str, Any]:
+        """Return SQLite-backed per-file change counts and pending diff-size summary for deciding whether the wiki changed enough to restructure."""
+        return wiki_change_summary(
+            _wiki_path(wiki_path),
+            include_raw=include_raw,
+            update=update,
+            since=since,
+            change_count_threshold=change_count_threshold,
+            byte_threshold=byte_threshold,
+            line_threshold=line_threshold,
+        )
 
     mcp.run()
 

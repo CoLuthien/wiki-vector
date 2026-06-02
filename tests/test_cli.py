@@ -117,3 +117,18 @@ def test_cli_search_reports_embedder_mismatch_without_traceback(tmp_path):
     assert search.returncode == 2
     assert "embedding backend mismatch" in search.stderr
     assert "Traceback" not in search.stderr
+
+
+def test_cli_change_summary_json_reports_pending_changes(tmp_path):
+    wiki = make_wiki(tmp_path)
+    baseline = run_cli("--wiki", str(wiki), "change-summary", "--update", "--json")
+    (wiki / "concepts" / "runbook.md").write_text((wiki / "concepts" / "runbook.md").read_text(encoding="utf-8") + "\nCLI changed line.\n", encoding="utf-8")
+    pending = run_cli("--wiki", str(wiki), "change-summary", "--json")
+
+    assert baseline.returncode == 0, baseline.stderr
+    assert pending.returncode == 0, pending.stderr
+    assert json.loads(baseline.stdout)["event_counts"]["added"] == 1
+    data = json.loads(pending.stdout)
+    assert data["pending_events"] == 1
+    assert data["event_counts"]["modified"] == 1
+    assert data["files"][0]["path"] == "concepts/runbook.md"

@@ -43,3 +43,23 @@ def wiki_verbosity_audit(wiki_path: str, limit: int = 20, include_raw: bool = Fa
     """Return highest-verbosity pages in the wiki with structured diagnostics."""
     results = WikiIndex(wiki_path).verbosity_audit(limit=limit, include_raw=include_raw, severity=severity)
     return {"results": [r.to_dict() for r in results], "count": len(results)}
+
+
+def wiki_change_summary(
+    wiki_path: str,
+    include_raw: bool = False,
+    update: bool = False,
+    since: str | None = None,
+    change_count_threshold: int = 1,
+    byte_threshold: int = 1,
+    line_threshold: int = 1,
+) -> dict:
+    """Return SQLite-backed per-file change counts and pending diff-size summary for cron gating."""
+    return WikiIndex(wiki_path).change_summary(
+        include_raw=include_raw,
+        update=update,
+        since=since,
+        change_count_threshold=change_count_threshold,
+        byte_threshold=byte_threshold,
+        line_threshold=line_threshold,
+    )

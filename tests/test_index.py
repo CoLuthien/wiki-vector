@@ -132,6 +132,7 @@ def test_hybrid_search_reports_component_scores(tmp_path):
     assert results[0].bm25_score > 0
     assert results[0].vector_score > 0
 
+
 def test_read_returns_requested_line_range(tmp_path):
     wiki = make_wiki(tmp_path)
     index = WikiIndex(wiki)
@@ -266,3 +267,45 @@ def test_search_rejects_embedder_mismatch_instead_of_reembedding_all_chunks(tmp_
     else:
         raise AssertionError("expected embedding mismatch error")
     assert mismatched.embed_calls == []
+
+
+def test_change_summary_tracks_file_update_counts_and_diff_sizes(tmp_path):
+    wiki = make_wiki(tmp_path)
+    index = WikiIndex(wiki)
+
+    baseline = index.change_summary(update=True)
+    assert baseline["total_events"] == 1
+    assert baseline["event_counts"]["added"] == 1
+    assert baseline["files"][0]["path"] == "concepts/runbook.md"
+    assert baseline["files"][0]["change_count"] == 1
+
+    runbook = wiki / "concepts" / "runbook.md"
+    runbook.write_text(runbook.read_text(encoding="utf-8") + "\n## Cache reuse\n\nOperators can be reused after wiki edits.\n", encoding="utf-8")
+    changed = index.change_summary(update=True, since="baseline")
+
+    assert changed["total_events"] == 2
+    assert changed["event_counts"]["modified"] == 1
+    file_row = next(row for row in changed["files"] if row["path"] == "concepts/runbook.md")
+    assert file_row["change_count"] == 2
+    assert file_row["last_change_kind"] == "modified"
+    assert file_row["last_diff"]["added_lines"] >= 3
+    assert file_row["last_diff"]["removed_lines"] == 0
+    assert changed["aggregate"]["abs_line_delta"] >= 3
+    assert changed["significant_change"] is True
+
+
+def test_change_summary_can_report_without_updating_state_and_ignores_raw_by_default(tmp_path):
+    wiki = make_wiki(tmp_path)
+    index = WikiIndex(wiki)
+    index.change_summary(update=True)
+
+    (wiki / "concepts" / "new-page.md").write_text("# New Page\n\nImportant active edit.\n", encoding="utf-8")
+    (wiki / "raw" / "transcripts" / "session.md").write_text("# Raw Session\n\nRaw edit should be opt-in.\n", encoding="utf-8")
+    preview = index.change_summary(update=False, since="baseline")
+    after_preview = index.change_summary(update=False, since="baseline")
+
+    assert preview["pending_events"] == 1
+    assert preview["event_counts"]["added"] == 1
+    assert preview["files"][0]["path"] == "concepts/new-page.md"
+    assert after_preview["pending_events"] == 1
+    assert all(not row["path"].startswith("raw/") for row in preview["files"])
