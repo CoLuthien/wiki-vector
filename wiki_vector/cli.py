@@ -87,6 +87,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_changes.add_argument("--byte-threshold", type=int, default=1)
     p_changes.add_argument("--line-threshold", type=int, default=1)
     p_changes.add_argument("--json", action="store_true")
+
+    p_consistency = sub.add_parser("consistency-audit", help="Audit Markdown/manifest/chunks/LanceDB index consistency")
+    p_consistency.add_argument("--include-raw", action="store_true", help="Audit against raw/ included, regardless of manifest setting")
+    p_consistency.add_argument("--json", action="store_true")
     return parser
 
 
@@ -176,6 +180,20 @@ def main(argv: list[str] | None = None) -> int:
             for row in data.get("files", [])[:10]:
                 diff = row.get("last_diff") or {}
                 print(f"- {row.get('path')} changes={row.get('change_count')} kind={row.get('last_change_kind')} Δbytes={diff.get('byte_delta')} Δlines={diff.get('line_delta')}")
+        return 0
+    if args.command == "consistency-audit":
+        data = index.consistency_audit(include_raw=True if args.include_raw else None)
+        if args.json:
+            _print_json(data)
+        else:
+            state = "OK" if data.get("ok") else "STALE"
+            summary = data.get("summary", {})
+            print(f"{state} issues={summary.get('issue_count')} markdown_chunks={summary.get('markdown_chunks')} indexed_chunks={summary.get('chunk_file_chunks')} lancedb_rows={summary.get('lancedb_rows')}")
+            for issue in data.get("issues", [])[:20]:
+                loc = f" {issue.get('path')}" if issue.get("path") else ""
+                print(f"- {issue.get('severity')} {issue.get('code')}{loc}: {issue.get('message')}")
+            for recommendation in data.get("recommendations", []):
+                print(f"Recommendation: {recommendation}")
         return 0
     raise AssertionError(args.command)
 

@@ -394,6 +394,111 @@ class WikiIndex:
             line_threshold=line_threshold,
         )
 
+
+    def consistency_audit(self, include_raw: bool | None = None) -> dict[str, Any]:
+        """Audit whether Markdown, manifest, JSONL chunks, and LanceDB rows agree.
+
+        This is read-only diagnostics: it reports drift and corruption without
+        rebuilding anything. Use `reindex()` to repair reported issues.
+        """
+        issues: list[dict[str, Any]] = []
+        manifest = _read_json_file(self.manifest_file)
+        manifest_include_raw = bool(manifest.get("include_raw", False)) if manifest else False
+        effective_include_raw = manifest_include_raw if include_raw is None else bool(include_raw)
+
+        markdown_files: dict[str, dict[str, Any]] = {}
+        markdown_chunks: list[dict[str, Any]] = []
+        for path in iter_wiki_markdown_files(self.wiki_path, include_raw=effective_include_raw):
+            rel_path = path.relative_to(self.wiki_path)
+            rel = rel_path.as_posix()
+            text = path.read_text(encoding="utf-8")
+            doc_chunks = chunk_document(parse_markdown(rel_path, text))
+            st = path.stat()
+            markdown_files[rel] = {"mtime": st.st_mtime, "size": st.st_size, "chunks": len(doc_chunks)}
+            markdown_chunks.extend(chunk.to_dict() for chunk in doc_chunks)
+
+        chunk_rows = self._load_chunks()
+        chunk_file_paths = {str(row.get("path", "")) for row in chunk_rows}
+        markdown_paths = set(markdown_files)
+        manifest_files = manifest.get("files", {}) if isinstance(manifest.get("files", {}), dict) else {}
+        manifest_paths = set(manifest_files)
+
+        if not self.manifest_file.exists():
+            issues.append(_audit_issue("manifest_missing", "high", "Index manifest is missing.", artifact=self.manifest_file.as_posix()))
+        if not self.chunks_file.exists():
+            issues.append(_audit_issue("chunks_file_missing", "high", "Index chunks JSONL file is missing.", artifact=self.chunks_file.as_posix()))
+
+        for path in sorted(manifest_paths - markdown_paths):
+            issues.append(_audit_issue("indexed_file_missing", "high", "Manifest references a Markdown file that no longer exists.", path=path))
+        for path in sorted(markdown_paths - manifest_paths):
+            issues.append(_audit_issue("markdown_file_unindexed", "warning", "Markdown file is not present in the manifest.", path=path))
+        for path in sorted(chunk_file_paths - markdown_paths):
+            issues.append(_audit_issue("chunk_file_missing_source", "high", "chunks.jsonl contains rows for a missing Markdown file.", path=path))
+
+        for path in sorted(markdown_paths & manifest_paths):
+            expected = manifest_files.get(path) or {}
+            current = markdown_files[path]
+            stale_fields: list[str] = []
+            if int(expected.get("size", -1)) != int(current["size"]):
+                stale_fields.append("size")
+            if int(expected.get("chunks", -1)) != int(current["chunks"]):
+                stale_fields.append("chunks")
+            if abs(float(expected.get("mtime", 0.0) or 0.0) - float(current["mtime"])) > 1e-6:
+                stale_fields.append("mtime")
+            if stale_fields:
+                issues.append(_audit_issue("manifest_file_stale", "warning", "Manifest file metadata no longer matches Markdown source.", path=path, fields=stale_fields))
+
+        manifest_pages = int(manifest.get("pages_indexed", 0) or 0) if manifest else 0
+        manifest_chunks = int(manifest.get("chunks_indexed", 0) or 0) if manifest else 0
+        if manifest and manifest_pages != len(manifest_files):
+            issues.append(_audit_issue("manifest_page_count_mismatch", "warning", "Manifest pages_indexed does not match manifest file entries.", expected=len(manifest_files), actual=manifest_pages))
+        if manifest and manifest_chunks != len(chunk_rows):
+            issues.append(_audit_issue("manifest_chunk_count_mismatch", "high", "Manifest chunks_indexed does not match chunks.jsonl row count.", expected=len(chunk_rows), actual=manifest_chunks))
+        if len(markdown_chunks) != len(chunk_rows):
+            issues.append(_audit_issue("chunk_count_mismatch", "high", "Current Markdown chunk count does not match chunks.jsonl row count.", expected=len(markdown_chunks), actual=len(chunk_rows)))
+
+        markdown_ids = {row.get("id") for row in markdown_chunks}
+        chunk_ids = [row.get("id") for row in chunk_rows]
+        duplicate_chunk_ids = sorted({cid for cid in chunk_ids if cid and chunk_ids.count(cid) > 1})
+        if duplicate_chunk_ids:
+            issues.append(_audit_issue("duplicate_chunk_ids", "high", "chunks.jsonl contains duplicate chunk ids.", ids=duplicate_chunk_ids[:20], count=len(duplicate_chunk_ids)))
+        missing_chunk_ids = sorted(str(cid) for cid in markdown_ids - set(chunk_ids) if cid)
+        extra_chunk_ids = sorted(str(cid) for cid in set(chunk_ids) - markdown_ids if cid)
+        if missing_chunk_ids:
+            issues.append(_audit_issue("markdown_chunks_missing_from_index", "high", "Current Markdown chunks are missing from chunks.jsonl.", ids=missing_chunk_ids[:20], count=len(missing_chunk_ids)))
+        if extra_chunk_ids:
+            issues.append(_audit_issue("stale_chunks_in_index", "high", "chunks.jsonl has chunk ids not produced by current Markdown.", ids=extra_chunk_ids[:20], count=len(extra_chunk_ids)))
+
+        vector_rows = _lancedb_row_count(self.lancedb_dir, self.table_name)
+        expected_vector_rows = sum(len(_vector_rows_for_chunk(row, max_tokens=getattr(self.embedder, "max_length", None))) for row in chunk_rows)
+        if vector_rows is None:
+            issues.append(_audit_issue("lancedb_table_unavailable", "warning", "LanceDB table could not be opened for row-count audit.", artifact=self.lancedb_dir.as_posix()))
+        elif vector_rows != expected_vector_rows:
+            issues.append(_audit_issue("vector_row_count_mismatch", "high", "LanceDB row count does not match expected vector locator rows from chunks.jsonl.", expected=expected_vector_rows, actual=vector_rows))
+
+        recommendations: list[str] = []
+        if issues:
+            recommendations.append(f"Run wiki_reindex(include_raw={str(effective_include_raw).lower()}) to rebuild stale or inconsistent index artifacts.")
+        summary = {
+            "issue_count": len(issues),
+            "markdown_pages": len(markdown_files),
+            "markdown_chunks": len(markdown_chunks),
+            "manifest_pages": manifest_pages,
+            "manifest_chunks": manifest_chunks,
+            "manifest_file_entries": len(manifest_files),
+            "chunk_file_chunks": len(chunk_rows),
+            "lancedb_rows": vector_rows,
+            "expected_vector_rows": expected_vector_rows,
+        }
+        return {
+            "wiki_path": str(self.wiki_path),
+            "include_raw": effective_include_raw,
+            "ok": not issues,
+            "summary": summary,
+            "issues": issues,
+            "recommendations": recommendations,
+        }
+
     def write(self, path: str, content: str, mode: str = "create", reindex: bool = True) -> WriteResult:
         """Write a Markdown wiki page on the local source of truth.
 
@@ -523,6 +628,33 @@ class WikiIndex:
             hits[cid] = row
         return scores, hits
 
+
+
+def _read_json_file(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _audit_issue(code: str, severity: str, message: str, **details: Any) -> dict[str, Any]:
+    issue = {"code": code, "severity": severity, "message": message}
+    issue.update({k: v for k, v in details.items() if v is not None})
+    return issue
+
+
+def _lancedb_row_count(lancedb_dir: Path, table_name: str) -> int | None:
+    try:
+        import lancedb
+        db = lancedb.connect(lancedb_dir.as_posix())
+        table = db.open_table(table_name)
+        if hasattr(table, "count_rows"):
+            return int(table.count_rows())
+        return len(table.to_list())
+    except Exception:
+        return None
 
 def _apply_corpus_calibration(results: list[VerbosityResult]) -> None:
     """Add audit-time percentile metrics/reasons in-place via mutable metrics dicts.

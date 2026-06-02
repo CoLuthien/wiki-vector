@@ -146,3 +146,16 @@ def test_cli_change_summary_json_reports_pending_changes(tmp_path):
     assert data["pending_events"] == 1
     assert data["event_counts"]["modified"] == 1
     assert data["files"][0]["path"] == "concepts/runbook.md"
+
+
+def test_cli_consistency_audit_json_reports_stale_index(tmp_path):
+    wiki = make_wiki(tmp_path)
+    indexed = run_cli("--wiki", str(wiki), "index")
+    (wiki / "concepts" / "runbook.md").write_text((wiki / "concepts" / "runbook.md").read_text(encoding="utf-8") + "\n## Drift\n\nThe index is stale.\n", encoding="utf-8")
+    audit = run_cli("--wiki", str(wiki), "consistency-audit", "--json")
+
+    assert indexed.returncode == 0, indexed.stderr
+    assert audit.returncode == 0, audit.stderr
+    data = json.loads(audit.stdout)
+    assert data["ok"] is False
+    assert any(issue["code"] == "chunk_count_mismatch" for issue in data["issues"])

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from wiki_vector.mcp_tools import wiki_change_summary, wiki_is_verbose, wiki_read, wiki_reindex, wiki_search, wiki_status, wiki_verbosity_audit, wiki_write
+from wiki_vector.mcp_tools import wiki_change_summary, wiki_consistency_audit, wiki_is_verbose, wiki_read, wiki_reindex, wiki_search, wiki_status, wiki_verbosity_audit, wiki_write
 
 
 def make_wiki(tmp_path: Path) -> Path:
@@ -124,3 +124,14 @@ def test_mcp_change_summary_reports_pending_and_recorded_changes(tmp_path):
     assert pending["event_counts"]["modified"] == 1
     assert recorded["pending_events"] == 1
     assert recorded["files"][0]["last_diff"]["added_lines"] >= 1
+
+
+def test_mcp_consistency_audit_reports_stale_index(tmp_path):
+    wiki = make_wiki(tmp_path)
+    wiki_reindex(str(wiki), include_raw=False)
+    (wiki / "concepts" / "runbook.md").write_text((wiki / "concepts" / "runbook.md").read_text(encoding="utf-8") + "\n## Drift\n\nThe index is stale.\n", encoding="utf-8")
+
+    audit = wiki_consistency_audit(str(wiki))
+
+    assert audit["ok"] is False
+    assert any(issue["code"] == "chunk_count_mismatch" for issue in audit["issues"])

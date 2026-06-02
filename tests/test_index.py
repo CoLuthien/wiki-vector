@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 from wiki_vector.index import WikiIndex
 
@@ -335,3 +336,45 @@ def test_change_summary_can_report_without_updating_state_and_ignores_raw_by_def
     assert preview["files"][0]["path"] == "concepts/new-page.md"
     assert after_preview["pending_events"] == 1
     assert all(not row["path"].startswith("raw/") for row in preview["files"])
+
+
+def test_index_consistency_audit_reports_clean_index_and_markdown_drift(tmp_path):
+    wiki = make_wiki(tmp_path)
+    index = WikiIndex(wiki)
+    index.reindex(include_raw=False)
+
+    clean = index.consistency_audit()
+    assert clean["ok"] is True
+    assert clean["summary"]["issue_count"] == 0
+    assert clean["summary"]["manifest_pages"] == 1
+    assert clean["summary"]["chunk_file_chunks"] >= 2
+
+    runbook = wiki / "concepts" / "runbook.md"
+    runbook.write_text(runbook.read_text(encoding="utf-8") + "\n## New section\n\nIndex is now stale.\n", encoding="utf-8")
+    stale = index.consistency_audit()
+
+    assert stale["ok"] is False
+    assert stale["summary"]["markdown_pages"] == 1
+    assert stale["summary"]["markdown_chunks"] > stale["summary"]["chunk_file_chunks"]
+    issue_codes = {issue["code"] for issue in stale["issues"]}
+    assert "manifest_file_stale" in issue_codes
+    assert "chunk_count_mismatch" in issue_codes
+    assert stale["recommendations"] == ["Run wiki_reindex(include_raw=false) to rebuild stale or inconsistent index artifacts."]
+
+
+def test_index_consistency_audit_detects_missing_indexed_files_and_manifest_count_mismatch(tmp_path):
+    wiki = make_wiki(tmp_path)
+    index = WikiIndex(wiki)
+    index.reindex(include_raw=False)
+
+    (wiki / "concepts" / "runbook.md").unlink()
+    manifest = json.loads((wiki / ".vector" / "manifest.json").read_text(encoding="utf-8"))
+    manifest["chunks_indexed"] = 999
+    (wiki / ".vector" / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    audit = index.consistency_audit()
+
+    assert audit["ok"] is False
+    issue_codes = {issue["code"] for issue in audit["issues"]}
+    assert "indexed_file_missing" in issue_codes
+    assert "manifest_chunk_count_mismatch" in issue_codes

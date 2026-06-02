@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from .mcp_tools import wiki_change_summary, wiki_is_verbose, wiki_read, wiki_reindex, wiki_search, wiki_status, wiki_verbosity_audit, wiki_write
+from .mcp_tools import wiki_change_summary, wiki_consistency_audit, wiki_is_verbose, wiki_read, wiki_reindex, wiki_search, wiki_status, wiki_verbosity_audit, wiki_write
 
 
 def _wiki_path(value: str | None = None) -> str:
@@ -84,6 +84,11 @@ def main() -> None:
             byte_threshold=byte_threshold,
             line_threshold=line_threshold,
         )
+
+    @mcp.tool(name="wiki_consistency_audit")
+    def wiki_consistency_audit_tool(include_raw: bool | None = None, wiki_path: str | None = None) -> dict[str, Any]:
+        """Audit Markdown/manifest/chunks/LanceDB index consistency without repairing it."""
+        return wiki_consistency_audit(_wiki_path(wiki_path), include_raw=include_raw)
 
     mcp.run()
 

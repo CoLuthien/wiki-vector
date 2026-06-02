@@ -65,3 +65,8 @@ def wiki_change_summary(
         byte_threshold=byte_threshold,
         line_threshold=line_threshold,
     )
+
+
+def wiki_consistency_audit(wiki_path: str, include_raw: bool | None = None) -> dict:
+    """Audit Markdown/manifest/chunks/LanceDB index consistency without repairing it."""
+    return WikiIndex(wiki_path).consistency_audit(include_raw=include_raw)
