@@ -3,9 +3,11 @@ from __future__ import annotations
 from .index import WikiIndex
 
 
-def wiki_search(wiki_path: str, query: str, limit: int = 8, include_raw: bool = False, types: list[str] | None = None, tags: list[str] | None = None) -> dict:
+def wiki_search(wiki_path: str, query: str, limit: int = 8, include_raw: bool = False, types: list[str] | None = None, tags: list[str] | None = None, explain: bool = False) -> dict:
     """Return semantic/lexical candidate chunks with path, heading, snippet, score, and line-range read hints. Results are locators, not authority."""
     index = WikiIndex(wiki_path)
+    if explain:
+        return index.search_explain(query, limit=limit, include_raw=include_raw, types=types, tags=tags)
     return {"results": [r.to_dict() for r in index.search(query, limit=limit, include_raw=include_raw, types=types, tags=tags)]}
 
 

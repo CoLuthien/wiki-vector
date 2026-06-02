@@ -24,9 +24,9 @@ def main() -> None:
     mcp = FastMCP("llm-wiki-vector")
 
     @mcp.tool(name="wiki_search")
-    def wiki_search_tool(query: str, limit: int = 8, include_raw: bool = False, wiki_path: str | None = None) -> dict[str, Any]:
-        """Search the local LLM Wiki index. Returns candidate locators/snippets plus start_line, end_line, and read_hint."""
-        return wiki_search(_wiki_path(wiki_path), query, limit=limit, include_raw=include_raw)
+    def wiki_search_tool(query: str, limit: int = 8, include_raw: bool = False, explain: bool = False, wiki_path: str | None = None) -> dict[str, Any]:
+        """Search the local LLM Wiki index. Returns candidate locators/snippets plus start_line, end_line, and read_hint; explain=True adds deterministic BM25 keyword and vector-stage diagnostics."""
+        return wiki_search(_wiki_path(wiki_path), query, limit=limit, include_raw=include_raw, explain=explain)
 
     @mcp.tool(name="wiki_read")
     def wiki_read_tool(

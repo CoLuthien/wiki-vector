@@ -55,7 +55,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_search.add_argument("--include-raw", action="store_true")
     p_search.add_argument("--type", dest="types", action="append", help="Filter by page type; repeatable")
     p_search.add_argument("--tag", dest="tags", action="append", help="Filter by tag; repeatable")
-    p_search.add_argument("--json", action="store_true", help="Emit JSON array")
+    p_search.add_argument("--explain", action="store_true", help="With --json, include deterministic BM25 keyword and vector-stage diagnostics")
+    p_search.add_argument("--json", action="store_true", help="Emit JSON array, or an object with results+explain when --explain is set")
 
     p_read = sub.add_parser("read", help="Read a wiki page, heading section, or source line range")
     p_read.add_argument("path")
@@ -110,16 +111,30 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "search":
         try:
-            raw_results = index.search(args.query, limit=args.limit, include_raw=args.include_raw, types=args.types, tags=args.tags)
-            search_results = [r.to_dict() for r in raw_results]
+            search_results: list[dict[str, Any]]
+            explained: dict[str, Any]
+            if args.explain:
+                explained = index.search_explain(args.query, limit=args.limit, include_raw=args.include_raw, types=args.types, tags=args.tags)
+                search_results = explained["results"]
+            else:
+                raw_results = index.search(args.query, limit=args.limit, include_raw=args.include_raw, types=args.types, tags=args.tags)
+                search_results = [r.to_dict() for r in raw_results]
+                explained = {"results": search_results}
         except ValueError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 2
         if args.json:
-            print(json.dumps(search_results, ensure_ascii=False))
+            if args.explain:
+                print(json.dumps(explained, ensure_ascii=False))
+            else:
+                print(json.dumps(search_results, ensure_ascii=False))
         else:
             for r in search_results:
                 print(f"{float(r.get('score', 0.0)):.3f}\t{r.get('path')}#{r.get('heading')}\t{r.get('snippet')}")
+            if args.explain:
+                explain = explained.get("explain", {})
+                counts = explain.get("candidate_counts", {})
+                print(f"Explain: terms={explain.get('query_terms', [])} chunks={counts.get('chunks_after_filters')} bm25={counts.get('bm25_nonzero')} vector={counts.get('vector_hits')}")
         return 0
     if args.command == "read":
         result = index.read(args.path, heading=args.heading, start_line=args.start_line, end_line=args.end_line)

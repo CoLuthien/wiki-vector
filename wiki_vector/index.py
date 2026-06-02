@@ -257,6 +257,66 @@ class WikiIndex:
         results.sort(key=lambda r: r.score, reverse=True)
         return results[:limit]
 
+    def search_explain(
+        self,
+        query: str,
+        limit: int = 8,
+        include_raw: bool = False,
+        types: list[str] | None = None,
+        tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Search plus deterministic retrieval diagnostics.
+
+        Keyword-level explain is intentionally deterministic and local: BM25 is
+        decomposable by query term, so we report per-token BM25 contributions.
+        Dense vector retrieval is produced by embedding the whole query, so it is
+        reported as a stage-level trace rather than pretending individual words
+        have independent vector contributions.
+        """
+        chunks = self._load_chunks()
+        if not chunks:
+            self.reindex(include_raw=include_raw)
+            chunks = self._load_chunks()
+        self._ensure_embedder_matches_index()
+        q_terms = _unique_tokens(query)
+        if not q_terms:
+            return {
+                "results": [],
+                "explain": _empty_explain(query, include_raw=include_raw, types=types, tags=tags),
+            }
+
+        filtered = [c for c in chunks if _passes_filters(c, include_raw=include_raw, types=types, tags=tags)]
+        if not filtered:
+            explain = _empty_explain(query, include_raw=include_raw, types=types, tags=tags)
+            explain["candidate_counts"]["chunks_after_filters"] = 0
+            return {"results": [], "explain": explain}
+
+        bm25_scores = _bm25_scores(query, filtered)
+        vector_scores, vector_hits = self._vector_scores(query, filtered, include_raw=include_raw, types=types, tags=tags, limit=max(50, limit * 10))
+        results = self.search(query, limit=limit, include_raw=include_raw, types=types, tags=tags)
+        result_dicts = [r.to_dict() for r in results]
+        explain = {
+            "query": query,
+            "query_terms": q_terms,
+            "filters": {"include_raw": include_raw, "types": types, "tags": tags},
+            "weights": {"bm25": BM25_WEIGHT, "vector": VECTOR_WEIGHT},
+            "candidate_counts": {
+                "chunks_total": len(chunks),
+                "chunks_after_filters": len(filtered),
+                "bm25_nonzero": len(bm25_scores),
+                "vector_hits": len(vector_scores),
+                "returned": len(result_dicts),
+            },
+            "keyword_contributions": _keyword_contributions(query, filtered),
+            "trace": _search_trace(bm25_scores, vector_scores, vector_hits, filtered, limit=max(limit, 3)),
+            "fallbacks": [],
+            "notes": [
+                "BM25 keyword contributions are per-token deterministic scores.",
+                "Vector retrieval embeds the whole query, so vector explain is stage-level, not per keyword.",
+            ],
+        }
+        return {"results": result_dicts, "explain": explain}
+
     def read(self, path: str, heading: str | None = None, start_line: int | None = None, end_line: int | None = None) -> ReadResult:
         rel = self._safe_markdown_path(path)
         full = self.wiki_path / rel
@@ -528,6 +588,16 @@ def _tokens(text: str) -> list[str]:
     return [t.lower() for t in _TOKEN_RE.findall(text)]
 
 
+def _unique_tokens(text: str) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for token in _tokens(text):
+        if token not in seen:
+            seen.add(token)
+            result.append(token)
+    return result
+
+
 def _searchable_text(chunk: dict) -> str:
     return "\n".join([
         chunk.get("title", ""),
@@ -619,17 +689,75 @@ def _bm25_scores(query: str, chunks: list[dict]) -> dict[str, float]:
         dl = max(len(terms), 1)
         score = 0.0
         for term in q_terms:
-            freq = tf.get(term, 0)
-            if not freq:
-                continue
-            idf = math.log(1.0 + (n - doc_freq[term] + 0.5) / (doc_freq[term] + 0.5))
-            denom = freq + k1 * (1.0 - b + b * dl / max(avgdl, 1e-9))
-            score += idf * (freq * (k1 + 1.0) / denom)
+            score += _bm25_term_score(term, tf, dl, doc_freq, n, avgdl, k1=k1, b=b)
         if query.lower() in _searchable_text(chunk).lower():
             score += 1.0
         if score > 0:
             scores[chunk["id"]] = score
     return scores
+
+
+def _bm25_term_score(term: str, tf: Counter, dl: int, doc_freq: Counter, n: int, avgdl: float, *, k1: float = 1.5, b: float = 0.75) -> float:
+    freq = tf.get(term, 0)
+    if not freq:
+        return 0.0
+    idf = math.log(1.0 + (n - doc_freq[term] + 0.5) / (doc_freq[term] + 0.5))
+    denom = freq + k1 * (1.0 - b + b * dl / max(avgdl, 1e-9))
+    return idf * (freq * (k1 + 1.0) / denom)
+
+
+def _keyword_contributions(query: str, chunks: list[dict]) -> list[dict[str, Any]]:
+    q_terms = _unique_tokens(query)
+    tokenized = [_tokens(_searchable_text(chunk)) for chunk in chunks]
+    doc_freq = Counter()
+    for terms in tokenized:
+        doc_freq.update(set(terms))
+    n = max(len(chunks), 1)
+    avgdl = sum(len(t) for t in tokenized) / max(len(tokenized), 1)
+    rows: list[dict[str, Any]] = []
+    for term in q_terms:
+        hits: list[dict[str, Any]] = []
+        for chunk, terms in zip(chunks, tokenized):
+            tf = Counter(terms)
+            score = _bm25_term_score(term, tf, max(len(terms), 1), doc_freq, n, avgdl)
+            if score > 0:
+                hits.append({
+                    "path": chunk.get("path", ""),
+                    "heading": chunk.get("heading") or "",
+                    "bm25_contribution": round(score, 6),
+                    "read_hint": _read_hint(chunk),
+                })
+        hits.sort(key=lambda row: row["bm25_contribution"], reverse=True)
+        rows.append({"term": term, "matching_chunks": len(hits), "top_hits": hits[:5]})
+    return rows
+
+
+def _search_trace(bm25_scores: dict[str, float], vector_scores: dict[str, float], vector_hits: dict[str, dict], chunks: list[dict], *, limit: int) -> list[dict[str, Any]]:
+    by_id = {c["id"]: c for c in chunks} | vector_hits
+    trace: list[dict[str, Any]] = []
+    for cid, score in sorted(bm25_scores.items(), key=lambda item: item[1], reverse=True)[:limit]:
+        chunk = by_id.get(cid)
+        if chunk:
+            trace.append({"stage": "bm25", "path": chunk.get("path"), "heading": chunk.get("heading") or "", "score": round(score, 6), "read_hint": _read_hint(chunk)})
+    for cid, score in sorted(vector_scores.items(), key=lambda item: item[1], reverse=True)[:limit]:
+        chunk = by_id.get(cid)
+        if chunk:
+            trace.append({"stage": "vector", "path": chunk.get("path"), "heading": chunk.get("heading") or "", "score": round(score, 6), "read_hint": _read_hint(chunk)})
+    return trace
+
+
+def _empty_explain(query: str, *, include_raw: bool, types: list[str] | None, tags: list[str] | None) -> dict[str, Any]:
+    return {
+        "query": query,
+        "query_terms": _unique_tokens(query),
+        "filters": {"include_raw": include_raw, "types": types, "tags": tags},
+        "weights": {"bm25": BM25_WEIGHT, "vector": VECTOR_WEIGHT},
+        "candidate_counts": {"chunks_total": 0, "chunks_after_filters": 0, "bm25_nonzero": 0, "vector_hits": 0, "returned": 0},
+        "keyword_contributions": [],
+        "trace": [],
+        "fallbacks": [],
+        "notes": [],
+    }
 
 
 def _normalize_scores(scores: dict[str, float]) -> dict[str, float]:

@@ -38,6 +38,7 @@ cd /workspace/wiki-vector
 uv run python -m pytest -q
 uv run wiki-vector --wiki /workspace/llm-wiki index
 uv run wiki-vector --wiki /workspace/llm-wiki search "Gemma4 RyzenAI GQO" --json
+uv run wiki-vector --wiki /workspace/llm-wiki search "wiki-vector retrieval diagnostics" --json --explain
 uv run wiki-vector --wiki /workspace/llm-wiki read concepts/gemma4/runtime/ryzenai-runtime-171-runbook.md --heading "NPU verification"
 uv run wiki-vector --wiki /workspace/llm-wiki read concepts/wiki-vector/mcp.md --start-line 141 --end-line 157 --json
 uv run wiki-vector --wiki /workspace/llm-wiki is-verbose concepts/wiki-vector/mcp.md --json
@@ -123,6 +124,20 @@ Search results include component scores and exact read-location hints:
 }
 ```
 
+Use `search --explain --json` when debugging why a query did or did not retrieve a page. Explain mode returns `{results, explain}` instead of a bare result list. The `explain` block is deterministic and local: BM25 is decomposed into per-token `keyword_contributions`, while vector retrieval is reported as whole-query stage trace because dense embeddings do not provide honest per-keyword contributions.
+
+```json
+{
+  "explain": {
+    "query_terms": ["wiki-vector", "retrieval", "diagnostics"],
+    "weights": {"bm25": 0.35, "vector": 0.65},
+    "candidate_counts": {"chunks_after_filters": 239, "bm25_nonzero": 4, "vector_hits": 50, "returned": 8},
+    "keyword_contributions": [{"term": "diagnostics", "matching_chunks": 2, "top_hits": [{"path": "concepts/wiki-vector/mcp.md", "bm25_contribution": 1.23}]}],
+    "trace": [{"stage": "bm25", "path": "concepts/wiki-vector/mcp.md", "score": 2.4}, {"stage": "vector", "path": "queries/wiki/document-verbosity-methodology.md", "score": 0.72}]
+  }
+}
+```
+
 ## MCP server
 
 ```bash
@@ -144,7 +159,7 @@ mcp_servers:
 
 MCP tools:
 
-- `wiki_search(query, limit=8, include_raw=false)` — returns candidate path/heading/snippet locators plus `start_line`, `end_line`, and `read_hint` for where to read.
+- `wiki_search(query, limit=8, include_raw=false, explain=false)` — returns candidate path/heading/snippet locators plus `start_line`, `end_line`, and `read_hint` for where to read. With `explain=true`, also returns deterministic BM25 keyword contributions, candidate counts, and BM25/vector stage trace.
 - `wiki_read(path, heading=null, start_line=null, end_line=null)` — reads Markdown source of truth; `start_line`/`end_line` select an inclusive 1-indexed source-file range.
 - `wiki_write(path, content, mode="create", reindex=true)` — creates, overwrites, or appends a Markdown page and optionally rebuilds the index.
 - `wiki_reindex(include_raw=false)` — rebuilds the local LanceDB/BM25 hybrid index.

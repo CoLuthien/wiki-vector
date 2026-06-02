@@ -133,6 +133,32 @@ def test_hybrid_search_reports_component_scores(tmp_path):
     assert results[0].vector_score > 0
 
 
+def test_search_explain_reports_keyword_dependent_bm25_contributions(tmp_path):
+    wiki = make_wiki(tmp_path)
+    index = WikiIndex(wiki)
+    index.reindex(include_raw=False)
+
+    npu_explained = index.search_explain("xrt-smi NPU verification", limit=2)
+    runtime_explained = index.search_explain("deployment DLLs", limit=2)
+
+    assert npu_explained["results"][0]["path"] == "concepts/runbook.md"
+    assert npu_explained["explain"]["query_terms"] == ["xrt-smi", "npu", "verification"]
+    assert npu_explained["explain"]["weights"] == {"bm25": 0.35, "vector": 0.65}
+    assert npu_explained["explain"]["filters"] == {"include_raw": False, "types": None, "tags": None}
+    assert npu_explained["explain"]["candidate_counts"]["returned"] == len(npu_explained["results"])
+
+    by_term = {row["term"]: row for row in npu_explained["explain"]["keyword_contributions"]}
+    assert by_term["xrt-smi"]["matching_chunks"] >= 1
+    assert by_term["xrt-smi"]["top_hits"][0]["path"] == "concepts/runbook.md"
+    assert by_term["xrt-smi"]["top_hits"][0]["bm25_contribution"] > 0
+    assert any(stage["stage"] == "vector" for stage in npu_explained["explain"]["trace"])
+    assert any(stage["stage"] == "bm25" for stage in npu_explained["explain"]["trace"])
+
+    npu_terms = [row["term"] for row in npu_explained["explain"]["keyword_contributions"]]
+    runtime_terms = [row["term"] for row in runtime_explained["explain"]["keyword_contributions"]]
+    assert npu_terms != runtime_terms
+
+
 def test_read_returns_requested_line_range(tmp_path):
     wiki = make_wiki(tmp_path)
     index = WikiIndex(wiki)

@@ -119,6 +119,20 @@ def test_cli_search_reports_embedder_mismatch_without_traceback(tmp_path):
     assert "Traceback" not in search.stderr
 
 
+def test_cli_search_explain_json_returns_results_and_explain(tmp_path):
+    wiki = make_wiki(tmp_path)
+    indexed = run_cli("--wiki", str(wiki), "index")
+    search = run_cli("--wiki", str(wiki), "search", "xrt-smi NPU", "--json", "--explain")
+
+    assert indexed.returncode == 0, indexed.stderr
+    assert search.returncode == 0, search.stderr
+    data = json.loads(search.stdout)
+    assert data["results"][0]["path"] == "concepts/runbook.md"
+    assert data["explain"]["query_terms"] == ["xrt-smi", "npu"]
+    assert data["explain"]["keyword_contributions"][0]["term"] == "xrt-smi"
+    assert any(stage["stage"] == "bm25" for stage in data["explain"]["trace"])
+
+
 def test_cli_change_summary_json_reports_pending_changes(tmp_path):
     wiki = make_wiki(tmp_path)
     baseline = run_cli("--wiki", str(wiki), "change-summary", "--update", "--json")

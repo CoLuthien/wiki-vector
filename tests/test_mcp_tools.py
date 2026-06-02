@@ -37,6 +37,18 @@ def test_mcp_tool_functions_return_serializable_dicts(tmp_path):
     assert current["chunks_indexed"] >= 1
 
 
+def test_mcp_wiki_search_can_include_explain_block(tmp_path):
+    wiki = make_wiki(tmp_path)
+    wiki_reindex(str(wiki), include_raw=False)
+
+    search = wiki_search(str(wiki), "deployment DLLs", limit=2, explain=True)
+
+    assert search["results"][0]["path"] == "concepts/runbook.md"
+    assert search["explain"]["query_terms"] == ["deployment", "dlls"]
+    assert search["explain"]["candidate_counts"]["returned"] == len(search["results"])
+    assert search["explain"]["keyword_contributions"][0]["top_hits"]
+
+
 def test_wiki_write_creates_page_and_reindexes(tmp_path):
     wiki = make_wiki(tmp_path)
 
