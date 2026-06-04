@@ -27,9 +27,9 @@ def wiki_reindex(wiki_path: str, include_raw: bool = False) -> dict:
     return WikiIndex(wiki_path).reindex(include_raw=include_raw).to_dict()
 
 
-def wiki_write(wiki_path: str, path: str, content: str, mode: str = "create", reindex: bool = True) -> dict:
-    """Create, overwrite, or append to a Markdown wiki page, then optionally reindex."""
-    return WikiIndex(wiki_path).write(path, content=content, mode=mode, reindex=reindex).to_dict()
+def wiki_write(wiki_path: str, path: str, content: str, mode: str = "create", reindex: bool = True, heading: str | None = None, occurrence: int | None = None) -> dict:
+    """Create, overwrite, append, or replace a Markdown section, then optionally reindex."""
+    return WikiIndex(wiki_path).write(path, content=content, mode=mode, reindex=reindex, heading=heading, occurrence=occurrence).to_dict()
 
 
 def wiki_status(wiki_path: str) -> dict:

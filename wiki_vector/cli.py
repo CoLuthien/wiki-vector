@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+os.environ.setdefault("RUST_LOG", "error")
+
 from .embeddings import create_embedder, embedding_config_from_args
 from .index import WikiIndex
 
@@ -17,6 +19,18 @@ def _wiki_default() -> str:
 
 def _print_json(data: Any) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def _run_with_stderr_suppressed(fn):
+    """Suppress native-library stderr noise while preserving Python exceptions."""
+    saved = os.dup(2)
+    try:
+        with open(os.devnull, "w", encoding="utf-8") as devnull:
+            os.dup2(devnull.fileno(), 2)
+            return fn()
+    finally:
+        os.dup2(saved, 2)
+        os.close(saved)
 
 
 def _print_verbosity(result: dict[str, Any]) -> None:
@@ -91,6 +105,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_consistency = sub.add_parser("consistency-audit", help="Audit Markdown/manifest/chunks/LanceDB index consistency")
     p_consistency.add_argument("--include-raw", action="store_true", help="Audit against raw/ included, regardless of manifest setting")
     p_consistency.add_argument("--json", action="store_true")
+
+    p_write = sub.add_parser("write", help="Create, overwrite, append, or replace a section in a wiki page")
+    p_write.add_argument("path")
+    p_write.add_argument("--mode", default="create", choices=["create", "overwrite", "append", "replace-section"])
+    p_write.add_argument("--heading")
+    p_write.add_argument("--occurrence", type=int)
+    p_write.add_argument("--content-file", required=True)
+    p_write.add_argument("--no-reindex", action="store_true")
+    p_write.add_argument("--json", action="store_true")
     return parser
 
 
@@ -194,6 +217,27 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"- {issue.get('severity')} {issue.get('code')}{loc}: {issue.get('message')}")
             for recommendation in data.get("recommendations", []):
                 print(f"Recommendation: {recommendation}")
+        return 0
+    if args.command == "write":
+        try:
+            content = Path(args.content_file).read_text(encoding="utf-8")
+            def do_write() -> dict[str, Any]:
+                return index.write(
+                    args.path,
+                    content=content,
+                    mode=args.mode,
+                    heading=args.heading,
+                    occurrence=args.occurrence,
+                    reindex=not args.no_reindex,
+                ).to_dict()
+            result = _run_with_stderr_suppressed(do_write) if args.json else do_write()
+        except (ValueError, FileExistsError, FileNotFoundError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        if args.json:
+            _print_json(result)
+        else:
+            print(f"{result['mode']} {result['path']} bytes={result['bytes_written']}")
         return 0
     raise AssertionError(args.command)
 

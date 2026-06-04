@@ -45,9 +45,17 @@ def main() -> None:
         return wiki_reindex(_wiki_path(wiki_path), include_raw=include_raw)
 
     @mcp.tool(name="wiki_write")
-    def wiki_write_tool(path: str, content: str, mode: str = "create", reindex: bool = True, wiki_path: str | None = None) -> dict[str, Any]:
-        """Create, overwrite, or append to a Markdown wiki page, then optionally reindex."""
-        return wiki_write(_wiki_path(wiki_path), path=path, content=content, mode=mode, reindex=reindex)
+    def wiki_write_tool(
+        path: str,
+        content: str,
+        mode: str = "create",
+        heading: str | None = None,
+        occurrence: int | None = None,
+        reindex: bool = True,
+        wiki_path: str | None = None,
+    ) -> dict[str, Any]:
+        """Create, overwrite, append, or replace a Markdown heading section, then optionally reindex."""
+        return wiki_write(_wiki_path(wiki_path), path=path, content=content, mode=mode, heading=heading, occurrence=occurrence, reindex=reindex)
 
     @mcp.tool(name="wiki_status")
     def wiki_status_tool(wiki_path: str | None = None) -> dict[str, Any]:

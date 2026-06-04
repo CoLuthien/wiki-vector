@@ -1,5 +1,9 @@
 from pathlib import Path
+import inspect
 
+import pytest
+
+from wiki_vector import mcp_server
 from wiki_vector.mcp_tools import wiki_change_summary, wiki_consistency_audit, wiki_is_verbose, wiki_read, wiki_reindex, wiki_search, wiki_status, wiki_verbosity_audit, wiki_write
 
 
@@ -74,6 +78,71 @@ Use wiki_write for durable facts.
     assert result["reindexed"] is True
     assert (wiki / "concepts" / "new-finding.md").exists()
     assert search["results"][0]["path"] == "concepts/new-finding.md"
+
+
+def test_wiki_write_replace_section_updates_existing_page_and_reindexes(tmp_path):
+    wiki = make_wiki(tmp_path)
+    wiki_reindex(str(wiki), include_raw=False)
+
+    result = wiki_write(
+        str(wiki),
+        "concepts/runbook.md",
+        "Use wiki_write replace-section for precise edits.",
+        mode="replace-section",
+        heading="Runtime setup",
+    )
+
+    assert result["path"] == "concepts/runbook.md"
+    assert result["mode"] == "replace-section"
+    assert result["heading"] == "Runtime setup"
+    assert result["start_line"] == 9
+    assert result["end_line"] == 11
+    assert result["old_section_bytes"] > 0
+    assert result["new_section_bytes"] > 0
+    assert result["reindexed"] is True
+    updated = wiki_read(str(wiki), "concepts/runbook.md", heading="Runtime setup")
+    assert "replace-section" in updated["content"]
+    assert wiki_search(str(wiki), "precise edits", limit=2)["results"][0]["path"] == "concepts/runbook.md"
+
+
+def test_wiki_write_replace_section_missing_heading_does_not_modify_file(tmp_path):
+    wiki = make_wiki(tmp_path)
+    page = wiki / "concepts" / "runbook.md"
+    before = page.read_text(encoding="utf-8")
+
+    with pytest.raises(ValueError, match="heading not found"):
+        wiki_write(str(wiki), "concepts/runbook.md", "new", mode="replace-section", heading="Missing")
+
+    assert page.read_text(encoding="utf-8") == before
+
+
+def test_wiki_write_replace_section_failure_contracts_do_not_modify_file(tmp_path):
+    wiki = make_wiki(tmp_path)
+    page = wiki / "concepts" / "runbook.md"
+    before = page.read_text(encoding="utf-8")
+
+    with pytest.raises(ValueError, match="heading is required"):
+        wiki_write(str(wiki), "concepts/runbook.md", "new", mode="replace-section")
+    with pytest.raises(ValueError, match="occurrence must be >= 1"):
+        wiki_write(str(wiki), "concepts/runbook.md", "new", mode="replace-section", heading="Runtime setup", occurrence=0)
+    with pytest.raises(ValueError, match="heading occurrence not found"):
+        wiki_write(str(wiki), "concepts/runbook.md", "new", mode="replace-section", heading="Runtime setup", occurrence=2)
+    with pytest.raises(ValueError, match="heading.*match"):
+        wiki_write(str(wiki), "concepts/runbook.md", "## Renamed\nnew", mode="replace-section", heading="Runtime setup")
+    with pytest.raises(ValueError, match="level"):
+        wiki_write(str(wiki), "concepts/runbook.md", "### Runtime setup\nnew", mode="replace-section", heading="Runtime setup")
+    with pytest.raises(FileNotFoundError):
+        wiki_write(str(wiki), "concepts/missing.md", "new", mode="replace-section", heading="Runtime setup")
+
+    assert page.read_text(encoding="utf-8") == before
+
+
+def test_mcp_server_wiki_write_source_exposes_replace_section_parameters():
+    source = inspect.getsource(mcp_server)
+    assert "heading: str | None = None" in source
+    assert "occurrence: int | None = None" in source
+    assert "heading=heading" in source
+    assert "occurrence=occurrence" in source
 
 def test_wiki_read_returns_requested_line_range(tmp_path):
     wiki = make_wiki(tmp_path)

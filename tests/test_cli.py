@@ -159,3 +159,51 @@ def test_cli_consistency_audit_json_reports_stale_index(tmp_path):
     data = json.loads(audit.stdout)
     assert data["ok"] is False
     assert any(issue["code"] == "chunk_count_mismatch" for issue in data["issues"])
+
+
+def test_cli_write_replace_section_content_file_json(tmp_path):
+    wiki = make_wiki(tmp_path)
+    content_file = tmp_path / "section.md"
+    content_file.write_text("Use CLI replace-section for precise edits.\n", encoding="utf-8")
+
+    result = run_cli(
+        "--wiki", str(wiki),
+        "write", "concepts/runbook.md",
+        "--mode", "replace-section",
+        "--heading", "NPU verification",
+        "--content-file", str(content_file),
+        "--json",
+    )
+    read = run_cli("--wiki", str(wiki), "read", "concepts/runbook.md", "--heading", "NPU verification")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    data = json.loads(result.stdout)
+    assert data["mode"] == "replace-section"
+    assert data["path"] == "concepts/runbook.md"
+    assert data["heading"] == "NPU verification"
+    assert data["start_line"] == 9
+    assert data["end_line"] == 11
+    assert data["old_section_bytes"] > 0
+    assert data["new_section_bytes"] > 0
+    assert "precise edits" in read.stdout
+
+
+def test_cli_write_replace_section_error_has_no_traceback(tmp_path):
+    wiki = make_wiki(tmp_path)
+    content_file = tmp_path / "section.md"
+    content_file.write_text("new\n", encoding="utf-8")
+
+    result = run_cli(
+        "--wiki", str(wiki),
+        "write", "concepts/runbook.md",
+        "--mode", "replace-section",
+        "--heading", "Missing",
+        "--content-file", str(content_file),
+        "--json",
+    )
+
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "heading not found" in result.stderr
+    assert "Traceback" not in result.stderr
