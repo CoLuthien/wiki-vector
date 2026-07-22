@@ -378,3 +378,25 @@ def test_index_consistency_audit_detects_missing_indexed_files_and_manifest_coun
     issue_codes = {issue["code"] for issue in audit["issues"]}
     assert "indexed_file_missing" in issue_codes
     assert "manifest_chunk_count_mismatch" in issue_codes
+
+
+def test_write_reindex_preserves_existing_raw_index_mode(tmp_path):
+    wiki = make_wiki(tmp_path)
+    index = WikiIndex(wiki)
+    index.reindex(include_raw=True)
+
+    result = index.write(
+        "concepts/new.md",
+        "# New\n\nA new curated page.\n",
+        reindex=True,
+    )
+
+    assert result.status is not None
+    assert result.status["include_raw"] is True
+    assert result.status["pages_indexed"] == 3
+    chunk_paths = {
+        json.loads(line)["path"]
+        for line in index.chunks_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    }
+    assert "raw/transcripts/session.md" in chunk_paths

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .grep import grep_wiki
 from .index import WikiIndex
 
 
@@ -20,6 +21,27 @@ def wiki_read(
 ) -> dict:
     """Read a Markdown page, heading section, or 1-indexed source line range."""
     return WikiIndex(wiki_path).read(path, heading=heading, start_line=start_line, end_line=end_line).to_dict()
+
+
+def wiki_grep(
+    wiki_path: str,
+    pattern: str,
+    include_raw: bool = False,
+    regex: bool = False,
+    case_sensitive: bool = False,
+    context: int = 2,
+    limit: int = 100,
+) -> dict:
+    """Search Markdown source directly for literal text or a regular expression."""
+    return grep_wiki(
+        wiki_path,
+        pattern,
+        include_raw=include_raw,
+        regex=regex,
+        case_sensitive=case_sensitive,
+        context=context,
+        limit=limit,
+    )
 
 
 def wiki_reindex(wiki_path: str, include_raw: bool = False) -> dict:

@@ -3,7 +3,18 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from .mcp_tools import wiki_change_summary, wiki_consistency_audit, wiki_is_verbose, wiki_read, wiki_reindex, wiki_search, wiki_status, wiki_verbosity_audit, wiki_write
+from .mcp_tools import (
+    wiki_change_summary,
+    wiki_consistency_audit,
+    wiki_grep,
+    wiki_is_verbose,
+    wiki_read,
+    wiki_reindex,
+    wiki_search,
+    wiki_status,
+    wiki_verbosity_audit,
+    wiki_write,
+)
 
 
 def _wiki_path(value: str | None = None) -> str:
@@ -38,6 +49,27 @@ def main() -> None:
     ) -> dict[str, Any]:
         """Read a Markdown page, heading section, or 1-indexed source line range from the wiki source of truth."""
         return wiki_read(_wiki_path(wiki_path), path, heading=heading, start_line=start_line, end_line=end_line)
+
+    @mcp.tool(name="wiki_grep")
+    def wiki_grep_tool(
+        pattern: str,
+        include_raw: bool = False,
+        regex: bool = False,
+        case_sensitive: bool = False,
+        context: int = 2,
+        limit: int = 100,
+        wiki_path: str | None = None,
+    ) -> dict[str, Any]:
+        """Search Markdown source directly for exact strings or regular expressions, with source context and line hints."""
+        return wiki_grep(
+            _wiki_path(wiki_path),
+            pattern,
+            include_raw=include_raw,
+            regex=regex,
+            case_sensitive=case_sensitive,
+            context=context,
+            limit=limit,
+        )
 
     @mcp.tool(name="wiki_reindex")
     def wiki_reindex_tool(include_raw: bool = False, wiki_path: str | None = None) -> dict[str, Any]:

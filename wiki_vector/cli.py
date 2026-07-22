@@ -10,6 +10,7 @@ from typing import Any
 os.environ.setdefault("RUST_LOG", "error")
 
 from .embeddings import create_embedder, embedding_config_from_args
+from .grep import grep_wiki
 from .index import WikiIndex
 
 
@@ -72,6 +73,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_search.add_argument("--explain", action="store_true", help="With --json, include deterministic BM25 keyword and vector-stage diagnostics")
     p_search.add_argument("--json", action="store_true", help="Emit JSON array, or an object with results+explain when --explain is set")
 
+    p_grep = sub.add_parser("grep", help="Search Markdown source directly for exact strings or regular expressions")
+    p_grep.add_argument("pattern")
+    p_grep.add_argument("--include-raw", action="store_true")
+    p_grep.add_argument("--regex", action="store_true", help="Interpret PATTERN as a regular expression instead of literal text")
+    p_grep.add_argument("--case-sensitive", action="store_true")
+    p_grep.add_argument("--context", type=int, default=2, help="Context lines before and after each matching line")
+    p_grep.add_argument("--limit", type=int, default=100)
+    p_grep.add_argument("--json", action="store_true")
+
     p_read = sub.add_parser("read", help="Read a wiki page, heading section, or source line range")
     p_read.add_argument("path")
     p_read.add_argument("--heading")
@@ -119,6 +129,32 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    # Source grep is deliberately independent of embeddings and disposable
+    # index artifacts, so handle it before constructing WikiIndex.
+    if args.command == "grep":
+        try:
+            data = grep_wiki(
+                args.wiki,
+                args.pattern,
+                include_raw=args.include_raw,
+                regex=args.regex,
+                case_sensitive=args.case_sensitive,
+                context=args.context,
+                limit=args.limit,
+            )
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        if args.json:
+            _print_json(data)
+        else:
+            for match in data["matches"]:
+                print(f"{match['path']}:{match['line']}:{match['column']}: {match['line_text']}")
+            if data["truncated"]:
+                print(f"Truncated: showing {data['count']} of {data['total_matches']} matches")
+        return 0
+
     config = embedding_config_from_args(
         backend=args.embedding_backend,
         model_name=args.embedding_model,

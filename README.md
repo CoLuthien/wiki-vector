@@ -39,6 +39,8 @@ uv run python -m pytest -q
 uv run wiki-vector --wiki /workspace/llm-wiki index
 uv run wiki-vector --wiki /workspace/llm-wiki search "Gemma4 RyzenAI GQO" --json
 uv run wiki-vector --wiki /workspace/llm-wiki search "wiki-vector retrieval diagnostics" --json --explain
+uv run wiki-vector --wiki /workspace/llm-wiki grep "Got negative shape dim bound" --context 1 --json
+uv run wiki-vector --wiki /workspace/llm-wiki grep 'prefix[0-9]+_nomha_xclbin' --regex --case-sensitive --json
 uv run wiki-vector --wiki /workspace/llm-wiki read concepts/gemma4/runtime/ryzenai-runtime-171-runbook.md --heading "NPU verification"
 uv run wiki-vector --wiki /workspace/llm-wiki read concepts/wiki-vector/mcp.md --start-line 141 --end-line 157 --json
 uv run wiki-vector --wiki /workspace/llm-wiki is-verbose concepts/wiki-vector/mcp.md --json
@@ -139,6 +141,26 @@ Use `search --explain --json` when debugging why a query did or did not retrieve
 }
 ```
 
+Use `grep` for rare identifiers, filenames, exact error strings, and regular
+expressions. Unlike `search`, it reads the Markdown source directly and does not
+require a fresh index. Literal, case-insensitive matching is the safe default;
+`--regex`, `--case-sensitive`, `--context`, `--limit`, and `--include-raw` are
+explicit opt-ins. Results include 1-indexed line/column locations, source context,
+and a `read_hint`. Raw pages remain excluded by default.
+
+## Internal architecture
+
+- `wiki_vector/index.py` orchestrates indexing, hybrid retrieval, source reads,
+  writes, and analysis APIs.
+- `wiki_vector/section_replace.py` owns fenced-code-aware, hierarchical ATX
+  section replacement; `wiki_vector.index._replace_markdown_section` remains a
+  compatibility alias.
+- `wiki_vector/consistency.py` owns read-only artifact auditing, including
+  structured diagnostics for malformed `manifest.json` and `chunks.jsonl`.
+- `wiki_vector/grep.py` owns index-independent literal/regex source search.
+- `wiki_vector/mcp_tools.py` contains pure serializable adapters, while
+  `wiki_vector/mcp_server.py` remains the thin FastMCP registration layer.
+
 ## MCP server
 
 ```bash
@@ -162,6 +184,7 @@ MCP tools:
 
 - `wiki_search(query, limit=8, include_raw=false, explain=false)` — returns candidate path/heading/snippet locators plus `start_line`, `end_line`, and `read_hint` for where to read. With `explain=true`, also returns deterministic BM25 keyword contributions, candidate counts, and BM25/vector stage trace.
 - `wiki_read(path, heading=null, start_line=null, end_line=null)` — reads Markdown source of truth; `start_line`/`end_line` select an inclusive 1-indexed source-file range.
+- `wiki_grep(pattern, include_raw=false, regex=false, case_sensitive=false, context=2, limit=100)` — searches Markdown source directly without relying on the index and returns exact line/column/context locators.
 - `wiki_write(path, content, mode="create", heading=null, occurrence=null, reindex=true)` — creates, overwrites, appends, or replaces one ATX Markdown heading section and optionally rebuilds the index. `mode="replace-section"` requires `heading`; it uses hierarchical section spans (nested lower-level headings are replaced with the target), preserves YAML frontmatter, ignores headings inside fenced code blocks, and fails on duplicate headings unless `occurrence` selects the 1-indexed match. Use this for section replacement / heading-scoped write / 섹션별 수정 / 부분 섹션 교체 without overwriting a whole page.
 - `wiki_reindex(include_raw=false)` — rebuilds the local LanceDB/BM25 hybrid index.
 - `wiki_status()` — reports index metadata.
@@ -175,6 +198,18 @@ Verbosity policy: `wiki_is_verbose` is advisory, not an automatic rewrite trigge
 Change-summary policy: use `wiki_change_summary(update=false, change_count_threshold=N, line_threshold=M)` as the cheap cron preflight. If `significant_change` is false, the scheduled wiki cleanup can stay silent. If true, run the restructuring/audit job and finish by calling `wiki_change_summary(update=true, ...)` or `wiki_reindex()` to record the new baseline. This ledger is operational metadata, not a source of truth; Markdown remains authoritative.
 
 Consistency-audit policy: use `wiki_consistency_audit()` when search results look stale, after manual Markdown edits, after changing embedding options, or before a scheduled maintenance job that depends on fresh locators. The audit is intentionally read-only and should not silently fix anything. High-severity issues such as `chunk_count_mismatch`, `manifest_chunk_count_mismatch`, `indexed_file_missing`, `stale_chunks_in_index`, or `vector_row_count_mismatch` mean the locator layer is stale or corrupt; follow the returned recommendation and run `wiki_reindex(include_raw=<reported include_raw>)`.
+
+Malformed artifact policy: `wiki_consistency_audit()` reports syntax failures as
+`manifest_invalid_json` or `chunks_file_invalid_json`, and structurally invalid but
+valid JSON as `manifest_invalid_schema`, `manifest_file_invalid_schema`, or
+`chunks_file_invalid_schema`. These are high-severity structured issues rather than
+decoder/coercion/key tracebacks. Valid manifest fields and JSONL rows remain auditable
+so the report retains as much repair context as possible.
+
+Write/reindex policy: when an existing index was built with `include_raw=true`, a
+successful `wiki_write(..., reindex=true)` preserves that corpus mode instead of
+silently rebuilding a curated-only index. If the disposable manifest is malformed,
+the Markdown write still succeeds and reindex falls back to the safe curated mode.
 
 Policy: `wiki_search` results are locators, not authoritative evidence. Agents
 should call `wiki_read` on the returned path/heading or returned line range before answering.

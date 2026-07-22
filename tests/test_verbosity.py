@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 from wiki_vector.verbosity import analyze_verbosity
 

@@ -11,9 +11,11 @@ from typing import Any
 
 from .chunking import Chunk, chunk_document
 from .changes import summarize_changes
+from .consistency import audit_index_consistency
 from .embeddings import Embedder, create_embedder
 from .markdown import iter_wiki_markdown_files, parse_markdown
-from .readability import EmbeddingSemanticStructureAnalyzer, ReadabilityAnalysis, ReadabilityAnalysisConfig, TransformersReadabilityModelAnalyzer
+from .readability import EmbeddingSemanticStructureAnalyzer, ReadabilityAnalysisConfig, TransformersReadabilityModelAnalyzer
+from .section_replace import SectionReplaceResult, replace_markdown_section as _replace_markdown_section
 from .verbosity import VerbosityResult, analyze_verbosity
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_./:\\-]+|[가-힣]+")
@@ -92,160 +94,6 @@ class WriteResult:
         return asdict(self)
 
 
-@dataclass(frozen=True)
-class SectionReplaceResult:
-    text: str
-    heading: str
-    start_line: int
-    end_line: int
-    old_section: str
-    new_section: str
-
-
-@dataclass(frozen=True)
-class _HeadingSpan:
-    line_index: int
-    line_number: int
-    level: int
-    text: str
-    raw_line: str
-    start_offset: int
-
-
-_HEADING_LINE_RE = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t]*\r?\n?$")
-_FENCE_LINE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
-
-
-def _replace_markdown_section(text: str, *, heading: str, content: str, occurrence: int | None = None) -> SectionReplaceResult:
-    if occurrence is not None and occurrence < 1:
-        raise ValueError("occurrence must be >= 1")
-    if not heading:
-        raise ValueError("heading is required for replace-section")
-    if not isinstance(content, str) or not content.strip():
-        raise ValueError("content must be a non-empty string")
-
-    lines = text.splitlines(keepends=True)
-    offsets = _line_offsets(lines)
-    headings = _scan_atx_headings(lines, offsets)
-    matches = [h for h in headings if h.text == heading]
-    if not matches:
-        raise ValueError(f"heading not found: {heading}")
-    if occurrence is None:
-        if len(matches) > 1:
-            raise ValueError(f"heading is ambiguous: {heading} appears {len(matches)} times; provide occurrence")
-        target = matches[0]
-    else:
-        if occurrence > len(matches):
-            raise ValueError(f"heading occurrence not found: {heading} occurrence {occurrence}")
-        target = matches[occurrence - 1]
-
-    next_boundary = len(lines)
-    for h in headings:
-        if h.line_index > target.line_index and h.level <= target.level:
-            next_boundary = h.line_index
-            break
-    section_end_line_index = next_boundary
-    while section_end_line_index > target.line_index + 1 and not lines[section_end_line_index - 1].strip():
-        section_end_line_index -= 1
-
-    start_offset = offsets[target.line_index]
-    end_offset = offsets[section_end_line_index] if section_end_line_index < len(offsets) else len(text)
-    old_section = text[start_offset:end_offset].rstrip("\r\n")
-    new_section = _build_replacement_section(target, content)
-    final = text[:start_offset] + new_section + text[end_offset:]
-    final = final.rstrip("\r\n") + "\n"
-    return SectionReplaceResult(
-        text=final,
-        heading=target.text,
-        start_line=target.line_number,
-        end_line=target.line_number + max(0, section_end_line_index - target.line_index - 1),
-        old_section=old_section,
-        new_section=new_section.rstrip("\r\n"),
-    )
-
-
-def _line_offsets(lines: list[str]) -> list[int]:
-    offsets: list[int] = []
-    current = 0
-    for line in lines:
-        offsets.append(current)
-        current += len(line)
-    offsets.append(current)
-    return offsets
-
-
-def _scan_atx_headings(lines: list[str], offsets: list[int]) -> list[_HeadingSpan]:
-    headings: list[_HeadingSpan] = []
-    start_index = _body_start_line_index(lines)
-    in_fence = False
-    fence_char = ""
-    fence_len = 0
-    for i, line in enumerate(lines[start_index:], start=start_index):
-        fence = _FENCE_LINE_RE.match(line)
-        if fence:
-            marker = fence.group(1)
-            if not in_fence:
-                in_fence = True
-                fence_char = marker[0]
-                fence_len = len(marker)
-                continue
-            if marker[0] == fence_char and len(marker) >= fence_len:
-                in_fence = False
-                fence_char = ""
-                fence_len = 0
-                continue
-        if in_fence:
-            continue
-        parsed = _parse_atx_heading_line(line)
-        if parsed is None:
-            continue
-        level, normalized = parsed
-        headings.append(_HeadingSpan(i, i + 1, level, normalized, line, offsets[i]))
-    return headings
-
-
-def _body_start_line_index(lines: list[str]) -> int:
-    if not lines or lines[0].strip() != "---":
-        return 0
-    for i in range(1, len(lines)):
-        if lines[i].strip() == "---":
-            return i + 1
-    return 0
-
-
-def _parse_atx_heading_line(line: str) -> tuple[int, str] | None:
-    match = _HEADING_LINE_RE.match(line)
-    if not match:
-        return None
-    text = _normalize_heading_text(match.group(2))
-    if not text:
-        return None
-    return len(match.group(1)), text
-
-
-def _normalize_heading_text(text: str) -> str:
-    return re.sub(r"[ \t]+#+[ \t]*$", "", text.strip()).strip()
-
-
-def _build_replacement_section(target: _HeadingSpan, content: str) -> str:
-    stripped = content.strip()
-    first_line = next((line for line in stripped.splitlines() if line.strip()), "")
-    first_heading = _parse_atx_heading_line(first_line)
-    if first_heading is None:
-        return target.raw_line.rstrip("\r\n") + "\n" + stripped + "\n"
-
-    level, normalized = first_heading
-    if normalized != target.text:
-        raise ValueError(f"replacement heading must match target heading: {target.text}")
-    if level != target.level:
-        raise ValueError(f"replacement heading level must match target level: {target.level}")
-    replacement_lines = stripped.splitlines(keepends=True)
-    offsets = _line_offsets(replacement_lines)
-    nested_headings = _scan_atx_headings(replacement_lines, offsets)
-    for h in nested_headings[1:]:
-        if h.level <= target.level:
-            raise ValueError("full-section replacement must not contain an additional same-or-higher heading")
-    return stripped + "\n"
 
 
 class WikiIndex:
@@ -557,108 +405,19 @@ class WikiIndex:
 
 
     def consistency_audit(self, include_raw: bool | None = None) -> dict[str, Any]:
-        """Audit whether Markdown, manifest, JSONL chunks, and LanceDB rows agree.
-
-        This is read-only diagnostics: it reports drift and corruption without
-        rebuilding anything. Use `reindex()` to repair reported issues.
-        """
-        issues: list[dict[str, Any]] = []
-        manifest = _read_json_file(self.manifest_file)
-        manifest_include_raw = bool(manifest.get("include_raw", False)) if manifest else False
-        effective_include_raw = manifest_include_raw if include_raw is None else bool(include_raw)
-
-        markdown_files: dict[str, dict[str, Any]] = {}
-        markdown_chunks: list[dict[str, Any]] = []
-        for path in iter_wiki_markdown_files(self.wiki_path, include_raw=effective_include_raw):
-            rel_path = path.relative_to(self.wiki_path)
-            rel = rel_path.as_posix()
-            text = path.read_text(encoding="utf-8")
-            doc_chunks = chunk_document(parse_markdown(rel_path, text))
-            st = path.stat()
-            markdown_files[rel] = {"mtime": st.st_mtime, "size": st.st_size, "chunks": len(doc_chunks)}
-            markdown_chunks.extend(chunk.to_dict() for chunk in doc_chunks)
-
-        chunk_rows = self._load_chunks()
-        chunk_file_paths = {str(row.get("path", "")) for row in chunk_rows}
-        markdown_paths = set(markdown_files)
-        manifest_files = manifest.get("files", {}) if isinstance(manifest.get("files", {}), dict) else {}
-        manifest_paths = set(manifest_files)
-
-        if not self.manifest_file.exists():
-            issues.append(_audit_issue("manifest_missing", "high", "Index manifest is missing.", artifact=self.manifest_file.as_posix()))
-        if not self.chunks_file.exists():
-            issues.append(_audit_issue("chunks_file_missing", "high", "Index chunks JSONL file is missing.", artifact=self.chunks_file.as_posix()))
-
-        for path in sorted(manifest_paths - markdown_paths):
-            issues.append(_audit_issue("indexed_file_missing", "high", "Manifest references a Markdown file that no longer exists.", path=path))
-        for path in sorted(markdown_paths - manifest_paths):
-            issues.append(_audit_issue("markdown_file_unindexed", "warning", "Markdown file is not present in the manifest.", path=path))
-        for path in sorted(chunk_file_paths - markdown_paths):
-            issues.append(_audit_issue("chunk_file_missing_source", "high", "chunks.jsonl contains rows for a missing Markdown file.", path=path))
-
-        for path in sorted(markdown_paths & manifest_paths):
-            expected = manifest_files.get(path) or {}
-            current = markdown_files[path]
-            stale_fields: list[str] = []
-            if int(expected.get("size", -1)) != int(current["size"]):
-                stale_fields.append("size")
-            if int(expected.get("chunks", -1)) != int(current["chunks"]):
-                stale_fields.append("chunks")
-            if abs(float(expected.get("mtime", 0.0) or 0.0) - float(current["mtime"])) > 1e-6:
-                stale_fields.append("mtime")
-            if stale_fields:
-                issues.append(_audit_issue("manifest_file_stale", "warning", "Manifest file metadata no longer matches Markdown source.", path=path, fields=stale_fields))
-
-        manifest_pages = int(manifest.get("pages_indexed", 0) or 0) if manifest else 0
-        manifest_chunks = int(manifest.get("chunks_indexed", 0) or 0) if manifest else 0
-        if manifest and manifest_pages != len(manifest_files):
-            issues.append(_audit_issue("manifest_page_count_mismatch", "warning", "Manifest pages_indexed does not match manifest file entries.", expected=len(manifest_files), actual=manifest_pages))
-        if manifest and manifest_chunks != len(chunk_rows):
-            issues.append(_audit_issue("manifest_chunk_count_mismatch", "high", "Manifest chunks_indexed does not match chunks.jsonl row count.", expected=len(chunk_rows), actual=manifest_chunks))
-        if len(markdown_chunks) != len(chunk_rows):
-            issues.append(_audit_issue("chunk_count_mismatch", "high", "Current Markdown chunk count does not match chunks.jsonl row count.", expected=len(markdown_chunks), actual=len(chunk_rows)))
-
-        markdown_ids = {row.get("id") for row in markdown_chunks}
-        chunk_ids = [row.get("id") for row in chunk_rows]
-        duplicate_chunk_ids = sorted({cid for cid in chunk_ids if cid and chunk_ids.count(cid) > 1})
-        if duplicate_chunk_ids:
-            issues.append(_audit_issue("duplicate_chunk_ids", "high", "chunks.jsonl contains duplicate chunk ids.", ids=duplicate_chunk_ids[:20], count=len(duplicate_chunk_ids)))
-        missing_chunk_ids = sorted(str(cid) for cid in markdown_ids - set(chunk_ids) if cid)
-        extra_chunk_ids = sorted(str(cid) for cid in set(chunk_ids) - markdown_ids if cid)
-        if missing_chunk_ids:
-            issues.append(_audit_issue("markdown_chunks_missing_from_index", "high", "Current Markdown chunks are missing from chunks.jsonl.", ids=missing_chunk_ids[:20], count=len(missing_chunk_ids)))
-        if extra_chunk_ids:
-            issues.append(_audit_issue("stale_chunks_in_index", "high", "chunks.jsonl has chunk ids not produced by current Markdown.", ids=extra_chunk_ids[:20], count=len(extra_chunk_ids)))
-
-        vector_rows = _lancedb_row_count(self.lancedb_dir, self.table_name)
-        expected_vector_rows = sum(len(_vector_rows_for_chunk(row, max_tokens=getattr(self.embedder, "max_length", None))) for row in chunk_rows)
-        if vector_rows is None:
-            issues.append(_audit_issue("lancedb_table_unavailable", "warning", "LanceDB table could not be opened for row-count audit.", artifact=self.lancedb_dir.as_posix()))
-        elif vector_rows != expected_vector_rows:
-            issues.append(_audit_issue("vector_row_count_mismatch", "high", "LanceDB row count does not match expected vector locator rows from chunks.jsonl.", expected=expected_vector_rows, actual=vector_rows))
-
-        recommendations: list[str] = []
-        if issues:
-            recommendations.append(f"Run wiki_reindex(include_raw={str(effective_include_raw).lower()}) to rebuild stale or inconsistent index artifacts.")
-        summary = {
-            "issue_count": len(issues),
-            "markdown_pages": len(markdown_files),
-            "markdown_chunks": len(markdown_chunks),
-            "manifest_pages": manifest_pages,
-            "manifest_chunks": manifest_chunks,
-            "manifest_file_entries": len(manifest_files),
-            "chunk_file_chunks": len(chunk_rows),
-            "lancedb_rows": vector_rows,
-            "expected_vector_rows": expected_vector_rows,
-        }
-        return {
-            "wiki_path": str(self.wiki_path),
-            "include_raw": effective_include_raw,
-            "ok": not issues,
-            "summary": summary,
-            "issues": issues,
-            "recommendations": recommendations,
-        }
+        """Audit Markdown and disposable index artifacts without repairing them."""
+        max_tokens = getattr(self.embedder, "max_length", None)
+        return audit_index_consistency(
+            wiki_path=self.wiki_path,
+            manifest_file=self.manifest_file,
+            chunks_file=self.chunks_file,
+            lancedb_dir=self.lancedb_dir,
+            table_name=self.table_name,
+            include_raw=include_raw,
+            expected_vector_rows_for_chunk=lambda row: len(
+                _vector_rows_for_chunk(row, max_tokens=max_tokens)
+            ),
+        )
 
     def write(
         self,
@@ -714,7 +473,15 @@ class WikiIndex:
             if tmp.exists():
                 tmp.unlink()
 
-        status = self.reindex(include_raw=False).to_dict() if reindex else None
+        reindex_include_raw = False
+        if reindex and self.manifest_file.exists():
+            try:
+                reindex_include_raw = self.status().include_raw
+            except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+                # Index metadata is disposable. A damaged manifest must not block
+                # a source-of-truth Markdown write; the following reindex repairs it.
+                reindex_include_raw = False
+        status = self.reindex(include_raw=reindex_include_raw).to_dict() if reindex else None
         return WriteResult(
             path=rel.as_posix(),
             mode=mode,
@@ -822,32 +589,6 @@ class WikiIndex:
         return scores, hits
 
 
-
-def _read_json_file(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-
-
-def _audit_issue(code: str, severity: str, message: str, **details: Any) -> dict[str, Any]:
-    issue = {"code": code, "severity": severity, "message": message}
-    issue.update({k: v for k, v in details.items() if v is not None})
-    return issue
-
-
-def _lancedb_row_count(lancedb_dir: Path, table_name: str) -> int | None:
-    try:
-        import lancedb
-        db = lancedb.connect(lancedb_dir.as_posix())
-        table = db.open_table(table_name)
-        if hasattr(table, "count_rows"):
-            return int(table.count_rows())
-        return len(table.to_list())
-    except Exception:
-        return None
 
 def _apply_corpus_calibration(results: list[VerbosityResult]) -> None:
     """Add audit-time percentile metrics/reasons in-place via mutable metrics dicts.
